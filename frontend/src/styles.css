@@ -225,6 +225,34 @@ button.btn-export:hover:not(:disabled) {
   pointer-events: none;
 }
 
+.canvas-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.info-label {
+  color: #64748b;
+  font-size: 0.72rem;
+  margin-bottom: 2px;
+}
+
+.info-value {
+  color: #0f172a;
+  font-weight: 600;
+}
+
 .action-bar {
   display: flex;
   align-items: center;

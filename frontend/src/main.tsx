@@ -37,6 +37,26 @@ type ImageDetails = {
 
 type Session = { projectId: string; recoveryKey: string; projectName: string }
 
+const KEYPOINT_SIGMA_MAP: Record<string, { sigma: number; label: string }> = {
+  nose: { sigma: 0.026, label: 'Rất hẹp' },
+  r_eye: { sigma: 0.025, label: 'Rất hẹp' },
+  l_eye: { sigma: 0.025, label: 'Rất hẹp' },
+  r_ear: { sigma: 0.035, label: 'Hẹp' },
+  l_ear: { sigma: 0.035, label: 'Hẹp' },
+  r_shoulder: { sigma: 0.079, label: 'Rộng' },
+  l_shoulder: { sigma: 0.079, label: 'Rộng' },
+  r_elbow: { sigma: 0.072, label: 'Trung bình' },
+  l_elbow: { sigma: 0.072, label: 'Trung bình' },
+  r_wrist: { sigma: 0.062, label: 'Trung bình' },
+  l_wrist: { sigma: 0.062, label: 'Trung bình' },
+  r_hip: { sigma: 0.107, label: 'Rất rộng' },
+  l_hip: { sigma: 0.107, label: 'Rất rộng' },
+  r_knee: { sigma: 0.087, label: 'Rộng' },
+  l_knee: { sigma: 0.087, label: 'Rộng' },
+  r_ankle: { sigma: 0.089, label: 'Rộng' },
+  l_ankle: { sigma: 0.089, label: 'Rộng' },
+}
+
 const saved = (): Session | null => {
   const raw = localStorage.getItem('landmark-session')
   return raw ? JSON.parse(raw) : null
@@ -477,9 +497,14 @@ function App() {
                         {Math.round(w.suspicion * 100)}%
                       </strong>
                     </div>
-                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                      {renderBadge(w.warning_type)}
-                      <span>{w.image_name}</span>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        {renderBadge(w.warning_type)}
+                        <span>{w.image_name}</span>
+                      </div>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#dc2626' }}>
+                        Lệch {Math.round(Math.hypot(w.human_x - w.suggested_x, w.human_y - w.suggested_y) * 10) / 10}px
+                      </span>
                     </div>
                     {w.review && (
                       <div style={{ marginTop: 4, fontSize: '0.75rem', color: '#16a34a' }}>
@@ -597,6 +622,40 @@ function App() {
                         />
                       </svg>
                     )}
+                  </div>
+
+                  {/* Bảng phân tích chi tiết độ lệch và chuẩn OKS */}
+                  <div className="canvas-info-grid">
+                    <div className="info-item">
+                      <span className="info-label">Độ lệch sai số</span>
+                      <span className="info-value" style={{ color: '#dc2626' }}>
+                        {Math.round(Math.hypot(selectedWarning.human_x - selectedWarning.suggested_x, selectedWarning.human_y - selectedWarning.suggested_y) * 10) / 10} px
+                      </span>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-label">Dung sai OKS (σ)</span>
+                      <span className="info-value">
+                        {KEYPOINT_SIGMA_MAP[selectedWarning.keypoint]?.sigma ?? 0.07} ({KEYPOINT_SIGMA_MAP[selectedWarning.keypoint]?.label ?? 'Chuẩn'})
+                      </span>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-label">Người gán nhãn</span>
+                      <span className="info-value">
+                        ({selectedWarning.human_x}, {selectedWarning.human_y})
+                      </span>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-label">Model AI gợi ý</span>
+                      <span className="info-value">
+                        ({selectedWarning.suggested_x}, {selectedWarning.suggested_y})
+                      </span>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-label">Phân loại lỗi</span>
+                      <span className="info-value">
+                        {renderBadge(selectedWarning.warning_type)}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Thanh thao tác Review kèm phím tắt */}
