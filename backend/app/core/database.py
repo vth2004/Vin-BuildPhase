@@ -40,7 +40,7 @@ def init_db() -> None:
           id TEXT PRIMARY KEY, run_id TEXT NOT NULL, image_name TEXT NOT NULL,
           keypoint TEXT NOT NULL, warning_type TEXT NOT NULL, suspicion REAL NOT NULL,
           human_x REAL NOT NULL, human_y REAL NOT NULL, suggested_x REAL NOT NULL, suggested_y REAL NOT NULL,
-          review TEXT
+          review TEXT, annotation_id TEXT
         );
         """)
         # Lightweight migration for existing databases
@@ -49,3 +49,6 @@ def init_db() -> None:
             conn.execute("ALTER TABLE datasets ADD COLUMN schema_id TEXT")
         if "annotation_path" not in existing:
             conn.execute("ALTER TABLE datasets ADD COLUMN annotation_path TEXT")
+        existing_warnings = {row[1] for row in conn.execute("PRAGMA table_info(warnings)")}
+        if "annotation_id" not in existing_warnings:
+            conn.execute("ALTER TABLE warnings ADD COLUMN annotation_id TEXT")

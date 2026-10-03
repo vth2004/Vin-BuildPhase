@@ -86,7 +86,7 @@ def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schem
 
         schema = schema_loader(dataset["schema_id"])
         image_rows = conn.execute("""
-            SELECT i.id, i.file_name, i.width, i.height, a.keypoints_json
+            SELECT i.id, i.file_name, i.width, i.height, a.id AS annotation_id, a.keypoints_json
             FROM images i
             JOIN annotations a ON a.image_id = i.id
             WHERE i.dataset_id = ?
@@ -104,6 +104,7 @@ def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schem
 
     for idx, row in enumerate(image_rows):
         file_name = row["file_name"]
+        annot_id = row["annotation_id"]
         image_path = storage_root / file_name
         if not image_path.is_file():
             continue
@@ -193,6 +194,7 @@ def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schem
                     round(mx, 1),
                     round(my, 1),
                     None,
+                    annot_id,
                 ))
 
         # Cập nhật tiến độ định kỳ
@@ -208,7 +210,7 @@ def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schem
     with db_factory() as conn:
         for w in warnings_to_insert:
             conn.execute(
-                "INSERT INTO warnings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO warnings (id, run_id, image_name, keypoint, warning_type, suspicion, human_x, human_y, suggested_x, suggested_y, review, annotation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 w,
             )
         conn.execute("UPDATE runs SET status = 'completed', progress = 100 WHERE id = ?", (run_id,))

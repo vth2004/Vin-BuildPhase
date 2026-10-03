@@ -113,7 +113,7 @@ function App() {
     const fetchKeypoints = async () => {
       try {
         const data = await request(
-          `/projects/${session.projectId}/runs/${runId}/images/${selectedWarning.image_name}/keypoints`
+          `/projects/${session.projectId}/runs/${runId}/warnings/${selectedWarning.id}/keypoints`
         )
         setImageDetails(data)
       } catch {
@@ -121,7 +121,7 @@ function App() {
       }
     }
     fetchKeypoints()
-  }, [selectedWarning?.id, selectedWarning?.image_name, runId, session?.projectId])
+  }, [selectedWarning?.id, runId, session?.projectId])
 
   // Danh sách các loại khớp duy nhất để làm bộ lọc
   const uniqueJoints = useMemo(() => {
