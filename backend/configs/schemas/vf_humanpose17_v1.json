@@ -1,0 +1,16 @@
+{
+  "id": "vf_humanpose17_v1",
+  "label": "VinFast HumanPose-17",
+  "annotation_label": "person",
+  "point_count": 17,
+  "coordinate_scale": "shoulder_or_torso",
+  "keypoints": [
+    {"id": 1, "name": "nose"}, {"id": 2, "name": "r_eye"}, {"id": 3, "name": "l_eye"},
+    {"id": 4, "name": "r_ear"}, {"id": 5, "name": "l_ear"}, {"id": 6, "name": "r_shoulder"},
+    {"id": 7, "name": "l_shoulder"}, {"id": 8, "name": "r_elbow"}, {"id": 9, "name": "l_elbow"},
+    {"id": 10, "name": "r_wrist"}, {"id": 11, "name": "l_wrist"}, {"id": 12, "name": "r_hip"},
+    {"id": 13, "name": "l_hip"}, {"id": 14, "name": "r_knee"}, {"id": 15, "name": "l_knee"},
+    {"id": 16, "name": "r_ankle"}, {"id": 17, "name": "l_ankle"}
+  ],
+  "edges": [[1,2],[1,3],[2,4],[3,5],[4,6],[5,7],[6,7],[6,12],[7,13],[12,13],[6,8],[8,10],[7,9],[9,11],[12,14],[14,16],[13,15],[15,17]]
+}
