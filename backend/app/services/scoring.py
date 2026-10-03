@@ -25,6 +25,29 @@ for r_id, l_id in SYMMETRIC_PAIRS:
     PAIR_LOOKUP[r_id] = l_id
     PAIR_LOOKUP[l_id] = r_id
 
+# Hệ số dung sai giải phẫu chuẩn COCO (OKS per-keypoint standard deviations sigma_i)
+# id 1..17 theo chuẩn VinFast vf_humanpose17_v1
+COCO_KEYPOINT_SIGMAS: dict[int, float] = {
+    1: 0.026,   # nose
+    2: 0.025,   # r_eye
+    3: 0.025,   # l_eye
+    4: 0.035,   # r_ear
+    5: 0.035,   # l_ear
+    6: 0.079,   # r_shoulder
+    7: 0.079,   # l_shoulder
+    8: 0.072,   # r_elbow
+    9: 0.072,   # l_elbow
+    10: 0.062,  # r_wrist
+    11: 0.062,  # l_wrist
+    12: 0.107,  # r_hip
+    13: 0.107,  # l_hip
+    14: 0.087,  # r_knee
+    15: 0.087,  # l_knee
+    16: 0.089,  # r_ankle
+    17: 0.089,  # l_ankle
+}
+DEFAULT_KEYPOINT_SIGMA: float = 0.070
+
 
 def compute_person_scale(bbox: tuple[float, float, float, float] | None, image_w: int = 1000, image_h: int = 1000) -> float:
     """Tính scale chuẩn hóa dựa trên diện tích hoặc đường chéo bbox."""
@@ -149,8 +172,12 @@ def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schem
             dist = math.hypot(hx - mx, hy - my)
             dist_norm = dist / scale
 
-            # Độ nghi ngờ thô (chuẩn hóa tỷ lệ lệch nhân độ tin cậy)
-            raw_suspicion = min(1.0, dist_norm * 4.5) * conf
+            # Cấu hình B: Điểm nghi ngờ theo chuẩn OKS sigma (k_i = 2 * sigma_i)
+            # Khớp nhạy cảm (mắt, mũi: sigma ~ 0.025) có dung sai hẹp; khớp lớn (vai, hông: sigma ~ 0.08-0.10) có dung sai rộng
+            sigma_i = COCO_KEYPOINT_SIGMAS.get(pt_id, DEFAULT_KEYPOINT_SIGMA)
+            k_i = 2.0 * sigma_i
+            oks_diff = 1.0 - math.exp(- (dist_norm ** 2) / (2.0 * (k_i ** 2)))
+            raw_suspicion = min(1.0, oks_diff * conf)
 
             warning_type = "suspected_error"
             suspicion = raw_suspicion
