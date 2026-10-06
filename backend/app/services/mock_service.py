@@ -28,11 +28,17 @@ def make_mock_results(run_id: str) -> None:
             human = values[point["id"]]
             human_x = human["x"] if human["x"] is not None else 0.0
             human_y = human["y"] if human["y"] is not None else 0.0
-            conn.execute("INSERT INTO warnings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
-                str(uuid.uuid4()), run_id, row["file_name"], point["name"],
-                "mock_suspected_error", max(score, 0.2), human_x, human_y,
-                human_x + 12.0, human_y + 12.0, None,
-            ))
+            conn.execute(
+                """INSERT INTO warnings (
+                    id, run_id, image_name, keypoint, warning_type, suspicion,
+                    human_x, human_y, suggested_x, suggested_y, review, reliability, delta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 0.0)""",
+                (
+                    str(uuid.uuid4()), run_id, row["file_name"], point["name"],
+                    "mock_suspected_error", max(score, 0.2), human_x, human_y,
+                    human_x + 12.0, human_y + 12.0, None,
+                ),
+            )
         conn.execute("UPDATE runs SET status = 'completed', progress = 100 WHERE id = ?", (run_id,))
 
 

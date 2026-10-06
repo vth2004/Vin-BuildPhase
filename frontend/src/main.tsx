@@ -18,6 +18,8 @@ type Warning = {
   suggested_x: number
   suggested_y: number
   review: string | null
+  reliability?: number
+  delta?: number
 }
 
 type KeypointDetail = {
@@ -76,12 +78,14 @@ function App() {
   const [imgNaturalSize, setImgNaturalSize] = useState<{ w: number; h: number } | null>(null)
   const [imageDetails, setImageDetails] = useState<ImageDetails | null>(null)
   const [showSkeleton, setShowSkeleton] = useState(true)
+  const [runMode, setRunMode] = useState<string | null>(null)
 
   // Bộ lọc
   const [minSuspicion, setMinSuspicion] = useState<number>(0.2)
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'reviewed'>('all')
   const [jointFilter, setJointFilter] = useState<string>('all')
   const [searchImage, setSearchImage] = useState<string>('')
+  const [reliabilityFilter, setReliabilityFilter] = useState<'all' | 'high' | 'hard'>('all')
 
   const imgRef = useRef<HTMLImageElement>(null)
 
@@ -111,7 +115,9 @@ function App() {
     let timerId: any
     const tick = async () => {
       const run = await request(`/projects/${session.projectId}/runs/${runId}`)
-      setMessage(`Tiến độ Run: ${run.status} (${run.progress}%)`)
+      if (run.mode) setRunMode(run.mode)
+      const modeLabel = run.mode === 'K2' ? 'Ensemble K=2' : run.mode === 'K1' || run.mode === 'K1_fast' ? 'K=1 Nhanh' : run.mode === 'K1_fallback' ? 'K=1 (Fallback)' : run.mode ? run.mode : ''
+      setMessage(`Tiến độ Run: ${run.status} (${run.progress}%) ${modeLabel ? `[${modeLabel}]` : ''}`)
       if (run.status === 'completed' || run.status === 'failed') {
         clearInterval(timerId)
         if (run.status === 'completed') {
@@ -158,9 +164,11 @@ function App() {
       if (statusFilter === 'reviewed' && w.review === null) return false
       if (jointFilter !== 'all' && w.keypoint !== jointFilter) return false
       if (searchImage && !w.image_name.toLowerCase().includes(searchImage.toLowerCase())) return false
+      if (reliabilityFilter === 'high' && (w.reliability ?? 1.0) < 0.70) return false
+      if (reliabilityFilter === 'hard' && (w.reliability ?? 1.0) >= 0.50 && w.warning_type !== 'hard_case') return false
       return true
     })
-  }, [warnings, minSuspicion, statusFilter, jointFilter, searchImage])
+  }, [warnings, minSuspicion, statusFilter, jointFilter, searchImage, reliabilityFilter])
 
   const createProject = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -413,6 +421,11 @@ function App() {
             <div>
               <h2 style={{ marginBottom: 4 }}>
                 3. Review trực quan ({filteredWarnings.length}/{warnings.length} điểm nghi ngờ)
+                {runMode && (
+                  <span className="badge badge-mode" style={{ marginLeft: 8, fontSize: '0.78rem', verticalAlign: 'middle' }}>
+                    {runMode === 'K2' ? 'Ensemble K=2 (YOLO26s + RTMPose)' : runMode === 'K1' || runMode === 'K1_fast' ? 'K=1 Nhanh' : runMode === 'K1_fallback' ? 'K=1 (Fallback)' : `Mode: ${runMode}`}
+                  </span>
+                )}
               </h2>
               <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
                 Phím tắt: <kbd>K</kbd> Giữ nhãn | <kbd>M</kbd> Nhận Model | <kbd>S</kbd> Bỏ qua | <kbd>↓</kbd>/<kbd>↑</kbd> Chuyển mục
@@ -445,6 +458,15 @@ function App() {
               >
                 Nghiêm trọng (≥80%)
               </button>
+            </div>
+
+            <div className="filter-group">
+              <span>Độ tin cậy:</span>
+              <select value={reliabilityFilter} onChange={e => setReliabilityFilter(e.target.value as any)}>
+                <option value="all">Tất cả</option>
+                <option value="high">Tin cậy cao (R ≥ 70%)</option>
+                <option value="hard">Ca khó / Bất định (R &lt; 50%)</option>
+              </select>
             </div>
 
             <div className="filter-group">
@@ -505,6 +527,23 @@ function App() {
                       <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#dc2626' }}>
                         Lệch {Math.round(Math.hypot(w.human_x - w.suggested_x, w.human_y - w.suggested_y) * 10) / 10}px
                       </span>
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: '#64748b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                      <span>
+                        Tin cậy: <strong style={{ color: (w.reliability ?? 1) >= 0.7 ? '#15803d' : (w.reliability ?? 1) < 0.5 ? '#b45309' : '#2563eb' }}>
+                          {Math.round((w.reliability ?? 1) * 100)}%
+                        </strong>
+                        {w.delta !== undefined && w.delta > 0 ? (
+                          <span style={{ marginLeft: 6, fontSize: '0.70rem', color: '#94a3b8' }}>
+                            (δ: {Math.round(w.delta * 1000) / 1000})
+                          </span>
+                        ) : null}
+                      </span>
+                      {(w.reliability ?? 1) >= 0.7 ? (
+                        <span className="badge badge-success-subtle">Tin cậy cao</span>
+                      ) : (w.reliability ?? 1) < 0.5 ? (
+                        <span className="badge badge-warning-subtle">Ca khó</span>
+                      ) : null}
                     </div>
                     {w.review && (
                       <div style={{ marginTop: 4, fontSize: '0.75rem', color: '#16a34a' }}>
@@ -633,6 +672,18 @@ function App() {
                       </span>
                     </div>
                     <div className="info-item">
+                      <span className="info-label">Độ tin cậy AI (R)</span>
+                      <span className="info-value" style={{ color: (selectedWarning.reliability ?? 1) >= 0.7 ? '#15803d' : (selectedWarning.reliability ?? 1) < 0.5 ? '#b45309' : '#2563eb' }}>
+                        {Math.round((selectedWarning.reliability ?? 1) * 100)}%
+                      </span>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-label">Độ bất đồng model (δ)</span>
+                      <span className="info-value">
+                        {selectedWarning.delta !== undefined ? Math.round(selectedWarning.delta * 10000) / 10000 : '0.0 (K=1)'}
+                      </span>
+                    </div>
+                    <div className="info-item">
                       <span className="info-label">Dung sai OKS (σ)</span>
                       <span className="info-value">
                         {KEYPOINT_SIGMA_MAP[selectedWarning.keypoint]?.sigma ?? 0.07} ({KEYPOINT_SIGMA_MAP[selectedWarning.keypoint]?.label ?? 'Chuẩn'})
@@ -645,7 +696,7 @@ function App() {
                       </span>
                     </div>
                     <div className="info-item">
-                      <span className="info-label">Model AI gợi ý</span>
+                      <span className="info-label">Tham chiếu p* gợi ý</span>
                       <span className="info-value">
                         ({selectedWarning.suggested_x}, {selectedWarning.suggested_y})
                       </span>

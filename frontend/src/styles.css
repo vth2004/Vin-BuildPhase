@@ -186,6 +186,9 @@ button.btn-export:hover:not(:disabled) {
 .badge-error { background: #fee2e2; color: #dc2626; }
 .badge-swap { background: #f3e8ff; color: #7e22ce; }
 .badge-hard { background: #fef9c3; color: #a16207; }
+.badge-success-subtle { background: #dcfce7; color: #15803d; }
+.badge-warning-subtle { background: #fef3c7; color: #b45309; }
+.badge-mode { background: #e0e7ff; color: #3730a3; border: 1px solid #c7d2fe; }
 
 /* Canvas viewer */
 .canvas-panel {

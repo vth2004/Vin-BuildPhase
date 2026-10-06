@@ -1,111 +1,114 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-# Các cặp khớp đối xứng trái - phải trong vf_humanpose17_v1: (Right_ID, Left_ID)
-SYMMETRIC_PAIRS: list[tuple[int, int]] = [
-    (2, 3),    # r_eye, l_eye
-    (4, 5),    # r_ear, l_ear
-    (6, 7),    # r_shoulder, l_shoulder
-    (8, 9),    # r_elbow, l_elbow
-    (10, 11),  # r_wrist, l_wrist
-    (12, 13),  # r_hip, l_hip
-    (14, 15),  # r_knee, l_knee
-    (16, 17),  # r_ankle, l_ankle
-]
+from app.adapters.yolo_pose import YoloPoseAdapter
+from app.services.ensemble import (
+    ALPHA,
+    COCO_KEYPOINT_SIGMAS,
+    DEFAULT_KEYPOINT_SIGMA,
+    DEFAULT_MODEL_WEIGHTS,
+    LAMBDA,
+    PAIR_LOOKUP,
+    TAU,
+    compute_disagreement,
+    compute_oks_suspicion,
+    compute_person_scale,
+    compute_ranking_score,
+    compute_reference_point,
+    compute_reliability,
+    compute_rho,
+    filter_consensus_models,
+    get_cached_prediction,
+    match_person_for_model,
+)
 
-# Tạo tra cứu cặp đối xứng: point_id -> counterpart_id
-PAIR_LOOKUP: dict[int, int] = {}
-for r_id, l_id in SYMMETRIC_PAIRS:
-    PAIR_LOOKUP[r_id] = l_id
-    PAIR_LOOKUP[l_id] = r_id
-
-# Hệ số dung sai giải phẫu chuẩn COCO (OKS per-keypoint standard deviations sigma_i)
-# id 1..17 theo chuẩn VinFast vf_humanpose17_v1
-COCO_KEYPOINT_SIGMAS: dict[int, float] = {
-    1: 0.026,   # nose
-    2: 0.025,   # r_eye
-    3: 0.025,   # l_eye
-    4: 0.035,   # r_ear
-    5: 0.035,   # l_ear
-    6: 0.079,   # r_shoulder
-    7: 0.079,   # l_shoulder
-    8: 0.072,   # r_elbow
-    9: 0.072,   # l_elbow
-    10: 0.062,  # r_wrist
-    11: 0.062,  # l_wrist
-    12: 0.107,  # r_hip
-    13: 0.107,  # l_hip
-    14: 0.087,  # r_knee
-    15: 0.087,  # l_knee
-    16: 0.089,  # r_ankle
-    17: 0.089,  # l_ankle
-}
-DEFAULT_KEYPOINT_SIGMA: float = 0.070
+logger = logging.getLogger(__name__)
 
 
-def compute_person_scale(bbox: tuple[float, float, float, float] | None, image_w: int = 1000, image_h: int = 1000) -> float:
-    """Tính scale chuẩn hóa dựa trên diện tích hoặc đường chéo bbox."""
-    if bbox:
-        x1, y1, x2, y2 = bbox
-        w = max(10.0, x2 - x1)
-        h = max(10.0, y2 - y1)
-        return math.sqrt(w * h)
-    return math.sqrt(image_w * image_h) * 0.3
-
-
-def match_person(human_points: list[dict], predicted_persons: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Ghép người gán với người model tìm thấy (dựa vào tâm cụm điểm keypoint)."""
-    if not predicted_persons:
-        return None
-    if len(predicted_persons) == 1:
-        return predicted_persons[0]
-
-    # Tính tâm của các điểm người gán (chỉ xét điểm có tọa độ)
-    valid_coords = [(pt["x"], pt["y"]) for pt in human_points if pt.get("x") is not None and pt.get("y") is not None]
-    if not valid_coords:
-        return predicted_persons[0]
-
-    center_hx = sum(c[0] for c in valid_coords) / len(valid_coords)
-    center_hy = sum(c[1] for c in valid_coords) / len(valid_coords)
-
-    best_match = None
-    min_dist = float("inf")
-
-    for p in predicted_persons:
-        if p.get("bbox"):
-            x1, y1, x2, y2 = p["bbox"]
-            cx = (x1 + x2) / 2
-            cy = (y1 + y2) / 2
-            dist = math.hypot(center_hx - cx, center_hy - cy)
-            if dist < min_dist:
-                min_dist = dist
-                best_match = p
-
-    return best_match or predicted_persons[0]
-
-
-def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schema_loader: Callable[[str], dict]) -> None:
+def setup_predictors(
+    target_mode: str,
+) -> tuple[dict[str, Any], str]:
     """
-    Thuật toán chấm điểm nghi ngờ thật cho run:
-    1. Chạy YOLO-pose dự đoán lại keypoints
-    2. Bỏ qua các điểm 'outside' (không so tọa độ)
-    3. Tính khoảng cách Euclid chuẩn hóa theo scale của người
-    4. Nhân với độ tin cậy của Model
-    5. Xử lý 'occluded' (hạ mức ưu tiên, nhãn hard_case)
-    6. Bắt lỗi hoán đổi trái/phải (swap_error)
+    Khởi tạo các mô hình dự đoán theo chế độ cấu hình.
+    
+    Hỗ trợ:
+      - 'K2': yolo26s-pose + rtmpose-m (mặc định)
+      - 'K1': yolo26s-pose (chế độ nhanh)
+      - 'K3': yolo26s-pose + rtmpose-m + yolov8m-pose (tùy chọn)
+      
+    Nếu RTMPose gặp lỗi, tự động fallback về 'K1_fallback'.
     """
-    from app.adapters.yolo_pose import YoloPoseAdapter
+    predictors: dict[str, Any] = {}
+    actual_mode = target_mode
+
+    # 1. Luôn nạp primary model: yolo26s-pose
+    try:
+        predictors["yolo26s-pose"] = YoloPoseAdapter(model_name="yolo26s-pose.pt")
+    except Exception as e:
+        logger.error(f"Lỗi khởi tạo YOLO26s: {e}")
+        raise e
+
+    if target_mode == "K1":
+        return predictors, "K1"
+
+    # 2. Nạp RTMPose cho K=2 hoặc K=3
+    if target_mode in ("K2", "K3"):
+        try:
+            from app.adapters.rtm_pose import RtmPosePredictor
+            predictors["rtmpose-m"] = RtmPosePredictor(mode="balanced")
+        except Exception as e:
+            logger.warning(f"Không thể khởi tạo RTMPose ({e}). Tự động fallback về K=1 (K1_fallback).")
+            actual_mode = "K1_fallback"
+
+    # 3. Nạp YOLOv8m nếu cấu hình K=3
+    if target_mode == "K3" and actual_mode != "K1_fallback":
+        try:
+            from app.adapters.yolo8m_pose import Yolo8mPosePredictor
+            predictors["yolov8m-pose"] = Yolo8mPosePredictor(model_name="yolov8m-pose.pt")
+        except Exception as e:
+            logger.warning(f"Không thể khởi tạo YOLOv8m ({e}). Tiếp tục với các model khả dụng.")
+
+    return predictors, actual_mode
+
+
+def run_scoring(
+    run_id: str,
+    db_factory: Callable[[], sqlite3.Connection],
+    schema_loader: Callable[[str], dict],
+    mode: str | None = None,
+) -> None:
+    """
+    Thuật toán chấm điểm nghi ngờ Ensemble cho run:
+    1. Lấy cấu hình chế độ (mặc định K=2: yolo26s + rtmpose-m; K=1: nhanh; K=3: tùy chọn)
+    2. Chạy tuần tự các model (sử dụng in-memory cache)
+    3. Ghép người theo tâm nhãn & lọc bounding box không đồng thuận (IoU >= 0.30)
+    4. Tính vị trí tham chiếu p*, độ bất đồng delta, sai số OKS e, độ tin cậy R và ranking score = e * R^alpha
+    5. Phát hiện lỗi hoán đổi trái/phải (swap_error) và xử lý điểm bị che khuất (occluded)
+    6. Lưu cảnh báo kèm R, delta vào DB và cập nhật chế độ đã dùng vào run.
+    """
+    # Xác định chế độ mục tiêu
+    target_mode = mode or os.environ.get("QA_ENSEMBLE_MODE", "K2").upper()
+    if target_mode not in ("K1", "K2", "K3"):
+        target_mode = "K2"
+
+    predictors, actual_mode = setup_predictors(target_mode)
+    K_target = 2 if target_mode == "K2" else (3 if target_mode == "K3" else 1)
 
     with db_factory() as conn:
         run = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         dataset = conn.execute("SELECT * FROM datasets WHERE id = ?", (run["dataset_id"],)).fetchone()
-        conn.execute("UPDATE runs SET status = 'running', progress = 5 WHERE id = ?", (run_id,))
+        conn.execute(
+            "UPDATE runs SET status = 'running', progress = 5, mode = ? WHERE id = ?",
+            (actual_mode, run_id),
+        )
 
         schema = schema_loader(dataset["schema_id"])
         image_rows = conn.execute("""
@@ -118,9 +121,6 @@ def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schem
 
     storage_root = Path(dataset["storage_path"]).resolve()
     keypoint_meta = {kp["id"]: kp for kp in schema["keypoints"]}
-
-    # Khởi tạo adapter (hiện tại hỗ trợ vf_humanpose17_v1)
-    adapter = YoloPoseAdapter(model_name="yolo26s-pose.pt")
     total_images = len(image_rows)
 
     warnings_to_insert = []
@@ -139,74 +139,120 @@ def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schem
 
         human_dict = {pt["id"]: pt for pt in human_points if isinstance(pt, dict) and "id" in pt}
 
-        # Model dự đoán
-        try:
-            preds = adapter.predict(image_path)
-        except Exception as e:
-            preds = []
+        # 1. Dự đoán tuần tự từ các model khả dụng
+        model_matches: dict[str, dict[str, Any] | None] = {}
+        for m_name, predictor in predictors.items():
+            try:
+                preds = get_cached_prediction(image_path, m_name, predictor.predict)
+                matched = match_person_for_model(human_points, preds)
+                model_matches[m_name] = matched
+            except Exception as e:
+                logger.warning(f"Lỗi dự đoán model {m_name} trên ảnh {file_name}: {e}")
+                model_matches[m_name] = None
 
-        matched = match_person(human_points, preds)
-        if not matched:
+        # 2. Lọc đồng thuận Bounding Box (loại trừ model bắt nhầm người khác)
+        valid_matches, K_eff = filter_consensus_models(
+            model_matches,
+            primary_model="yolo26s-pose",
+            iou_threshold=0.30,
+        )
+
+        if not valid_matches:
             continue
 
-        model_kpts = matched.get("keypoints", {})
-        scale = compute_person_scale(matched.get("bbox"), row["width"] or 1000, row["height"] or 1000)
+        # Lấy scale từ match chuẩn
+        ref_match = valid_matches.get("yolo26s-pose") or next(iter(valid_matches.values()))
+        scale = compute_person_scale(ref_match.get("bbox"), row["width"] or 1000, row["height"] or 1000)
+        rho_val = compute_rho(K_eff, K_target)
 
+        # 3. Duyệt từng keypoint người gán
         for pt_id, h_pt in human_dict.items():
             state = h_pt.get("state")
             hx = h_pt.get("x")
             hy = h_pt.get("y")
 
-            # QUY TẮC 1: Nếu 'outside' hoặc tọa độ null -> BỎ QUA KHÔNG SO SÁNH
+            # Bỏ qua nếu 'outside' hoặc tọa độ rỗng
             if state == "outside" or hx is None or hy is None:
                 continue
 
-            m_pt = model_kpts.get(pt_id)
-            if not m_pt or m_pt.get("x") is None or m_pt.get("y") is None:
+            # Thu thập quan sát từ các model hợp lệ: (x, y, conf, weight)
+            observations: list[tuple[float, float, float, float]] = []
+            for m_name, match_data in valid_matches.items():
+                m_kpts = match_data.get("keypoints", {})
+                pt_obs = m_kpts.get(pt_id)
+                if pt_obs and pt_obs.get("x") is not None and pt_obs.get("y") is not None:
+                    px_val = float(pt_obs["x"])
+                    py_val = float(pt_obs["y"])
+                    c_val = float(pt_obs.get("conf", 1.0))
+                    w_val = DEFAULT_MODEL_WEIGHTS.get(m_name, 1000.0)
+                    observations.append((px_val, py_val, c_val, w_val))
+
+            if not observations:
                 continue
 
-            mx = float(m_pt["x"])
-            my = float(m_pt["y"])
-            conf = float(m_pt.get("conf", 1.0))
+            # 4. Tính toán các chỉ số toán học Ensemble
+            p_star = compute_reference_point(observations)
+            delta_val = compute_disagreement(observations, p_star, scale)
 
-            dist = math.hypot(hx - mx, hy - my)
-            dist_norm = dist / scale
-
-            # Cấu hình B: Điểm nghi ngờ theo chuẩn OKS sigma (k_i = 2 * sigma_i)
-            # Khớp nhạy cảm (mắt, mũi: sigma ~ 0.025) có dung sai hẹp; khớp lớn (vai, hông: sigma ~ 0.08-0.10) có dung sai rộng
+            dist = math.hypot(hx - p_star[0], hy - p_star[1])
             sigma_i = COCO_KEYPOINT_SIGMAS.get(pt_id, DEFAULT_KEYPOINT_SIGMA)
-            k_i = 2.0 * sigma_i
-            oks_diff = 1.0 - math.exp(- (dist_norm ** 2) / (2.0 * (k_i ** 2)))
-            raw_suspicion = min(1.0, oks_diff * conf)
 
+            # Tính sai số OKS e_i
+            # Khi K=1 hoặc delta=0, mẫu số thuần túy là 2 * (2*sigma_i)^2
+            oks_e = compute_oks_suspicion(dist, scale, delta_val, sigma_i, lam=LAMBDA)
+
+            # Tính độ tin cậy R_i
+            sum_weights = sum(w for _, _, _, w in observations)
+            c_bar = (
+                sum(w * conf for _, _, conf, w in observations) / sum_weights
+                if sum_weights > 0
+                else 1.0
+            )
+            rel_R = compute_reliability(c_bar, delta_val, tau=TAU, rho=rho_val)
+
+            # Tính điểm xếp hạng: score = e * R^alpha (ở K=1: score = e * conf^alpha)
+            suspicion = compute_ranking_score(oks_e, rel_R, alpha=ALPHA)
             warning_type = "suspected_error"
-            suspicion = raw_suspicion
 
-            # QUY TẮC 2: Kiểm tra hoán đổi Trái / Phải (Left-Right Swap)
+            # 5. Kiểm tra hoán đổi Trái / Phải (Left-Right Swap)
             if pt_id in PAIR_LOOKUP:
                 other_id = PAIR_LOOKUP[pt_id]
                 other_h_pt = human_dict.get(other_id)
-                other_m_pt = model_kpts.get(other_id)
 
-                if (other_h_pt and other_h_pt.get("x") is not None and 
-                    other_m_pt and other_m_pt.get("x") is not None):
+                if other_h_pt and other_h_pt.get("x") is not None and other_h_pt.get("y") is not None:
                     o_hx, o_hy = other_h_pt["x"], other_h_pt["y"]
-                    o_mx, o_my = other_m_pt["x"], other_m_pt["y"]
 
-                    orig_dist = dist + math.hypot(o_hx - o_mx, o_hy - o_my)
-                    swap_dist = math.hypot(hx - o_mx, hy - o_my) + math.hypot(o_hx - mx, o_hy - my)
+                    # Lấy p* của khớp đối xứng nếu có
+                    other_obs = []
+                    for m_name, match_data in valid_matches.items():
+                        o_kpts = match_data.get("keypoints", {})
+                        o_pt_obs = o_kpts.get(other_id)
+                        if o_pt_obs and o_pt_obs.get("x") is not None and o_pt_obs.get("y") is not None:
+                            other_obs.append((
+                                float(o_pt_obs["x"]),
+                                float(o_pt_obs["y"]),
+                                float(o_pt_obs.get("conf", 1.0)),
+                                DEFAULT_MODEL_WEIGHTS.get(m_name, 1000.0),
+                            ))
 
-                    # Nếu hoán đổi làm khoảng cách giảm đi rõ rệt
-                    if swap_dist < orig_dist * 0.6 and orig_dist > scale * 0.15:
-                        warning_type = "swap_error"
-                        suspicion = max(suspicion, 0.88)
+                    if other_obs:
+                        other_p_star = compute_reference_point(other_obs)
+                        orig_dist = dist + math.hypot(o_hx - other_p_star[0], o_hy - other_p_star[1])
+                        swap_dist = (
+                            math.hypot(hx - other_p_star[0], hy - other_p_star[1]) +
+                            math.hypot(o_hx - p_star[0], o_hy - p_star[1])
+                        )
 
-            # QUY TẮC 3: Xử lý điểm bị che khuất ('occluded')
+                        if swap_dist < orig_dist * 0.6 and orig_dist > scale * 0.15:
+                            warning_type = "swap_error"
+                            suspicion = max(suspicion, 0.88)
+
+            # 6. Xử lý điểm bị che khuất ('occluded')
             if state == "occluded" and warning_type != "swap_error":
                 warning_type = "hard_case"
                 suspicion = suspicion * 0.5  # Hạ mức ưu tiên
 
-            # Chỉ lưu cảnh báo nếu độ nghi ngờ đủ đáng chú ý (>= 0.20)
+            # 7. Lưu cảnh báo nếu độ nghi ngờ >= 0.20
             if suspicion >= 0.20:
                 kp_name = keypoint_meta.get(pt_id, {}).get("name", f"point_{pt_id}")
                 warnings_to_insert.append((
@@ -218,10 +264,12 @@ def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schem
                     round(suspicion, 3),
                     round(hx, 1),
                     round(hy, 1),
-                    round(mx, 1),
-                    round(my, 1),
+                    round(p_star[0], 1),
+                    round(p_star[1], 1),
                     None,
                     annot_id,
+                    round(rel_R, 3),
+                    round(delta_val, 4),
                 ))
 
         # Cập nhật tiến độ định kỳ
@@ -230,14 +278,20 @@ def run_scoring(run_id: str, db_factory: Callable[[], sqlite3.Connection], schem
             with db_factory() as conn:
                 conn.execute("UPDATE runs SET progress = ? WHERE id = ?", (current_progress, run_id))
 
-    # Ghi toàn bộ cảnh báo vào DB
-    # Sắp xếp theo độ nghi ngờ giảm dần
+    # Sắp xếp cảnh báo theo độ nghi ngờ giảm dần
     warnings_to_insert.sort(key=lambda w: w[5], reverse=True)
 
     with db_factory() as conn:
         for w in warnings_to_insert:
             conn.execute(
-                "INSERT INTO warnings (id, run_id, image_name, keypoint, warning_type, suspicion, human_x, human_y, suggested_x, suggested_y, review, annotation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                """INSERT INTO warnings (
+                    id, run_id, image_name, keypoint, warning_type, suspicion,
+                    human_x, human_y, suggested_x, suggested_y, review, annotation_id,
+                    reliability, delta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 w,
             )
-        conn.execute("UPDATE runs SET status = 'completed', progress = 100 WHERE id = ?", (run_id,))
+        conn.execute(
+            "UPDATE runs SET status = 'completed', progress = 100, mode = ? WHERE id = ?",
+            (actual_mode, run_id),
+        )

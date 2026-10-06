@@ -25,7 +25,8 @@ backend/app/
 │
 ├── services/                   # Xử lý nghiệp vụ (Business Logic)
 │   ├── dataset_service.py      # Giải nén an toàn (anti-Zip Slip), validate schema
-│   ├── scoring.py              # Thuật toán so khớp tọa độ & tính điểm nghi ngờ
+│   ├── ensemble.py             # Thuật toán Ensemble: p*, delta, e, R, score, IoU consensus
+│   ├── scoring.py              # Dịch vụ chấm điểm nghi ngờ đa mô hình (K=1, K=2, K=3)
 │   └── mock_service.py         # Trình điều phối chạy nền & fallback kết quả giả lập
 │
 ├── routers/                    # Tầng API Endpoints (APIRouter)
@@ -35,7 +36,10 @@ backend/app/
 │   └── warnings.py             # /api/projects/{id}/runs/{id}/warnings, review, export
 │
 └── adapters/                   # Lớp cắm Model AI tự do (Model-Agnostic)
-    └── yolo_pose.py            # YoloPoseAdapter (tích hợp YOLO26s-pose)
+    ├── base.py                 # BasePosePredictor interface
+    ├── yolo_pose.py            # YoloPoseAdapter (YOLO26s-pose)
+    ├── rtm_pose.py             # RtmPosePredictor (RTMPose-m qua rtmlib/ONNX)
+    └── yolo8m_pose.py          # Yolo8mPosePredictor (YOLOv8m-pose cho K=3)
 ```
 
 ---

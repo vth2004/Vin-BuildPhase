@@ -34,13 +34,15 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS runs (
           id TEXT PRIMARY KEY, project_id TEXT NOT NULL, dataset_id TEXT NOT NULL,
           status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0,
+          mode TEXT DEFAULT 'K2',
           created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS warnings (
           id TEXT PRIMARY KEY, run_id TEXT NOT NULL, image_name TEXT NOT NULL,
           keypoint TEXT NOT NULL, warning_type TEXT NOT NULL, suspicion REAL NOT NULL,
           human_x REAL NOT NULL, human_y REAL NOT NULL, suggested_x REAL NOT NULL, suggested_y REAL NOT NULL,
-          review TEXT, annotation_id TEXT
+          review TEXT, annotation_id TEXT,
+          reliability REAL DEFAULT 1.0, delta REAL DEFAULT 0.0
         );
         """)
         # Lightweight migration for existing databases
@@ -52,3 +54,10 @@ def init_db() -> None:
         existing_warnings = {row[1] for row in conn.execute("PRAGMA table_info(warnings)")}
         if "annotation_id" not in existing_warnings:
             conn.execute("ALTER TABLE warnings ADD COLUMN annotation_id TEXT")
+        if "reliability" not in existing_warnings:
+            conn.execute("ALTER TABLE warnings ADD COLUMN reliability REAL DEFAULT 1.0")
+        if "delta" not in existing_warnings:
+            conn.execute("ALTER TABLE warnings ADD COLUMN delta REAL DEFAULT 0.0")
+        existing_runs = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+        if "mode" not in existing_runs:
+            conn.execute("ALTER TABLE runs ADD COLUMN mode TEXT DEFAULT 'K2'")
