@@ -2,11 +2,19 @@
 
 import unittest
 import numpy as np
-from face_vf50.backend.app.model.mapper import (
-    resample_polyline,
-    map_mediapipe_to_vf50,
-)
-from face_vf50.backend.app.model.mediapipe_face import get_detector
+import sys
+from pathlib import Path
+
+backend_dir = Path(__file__).resolve().parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
+
+try:
+    from app.model.mapper import resample_polyline, map_mediapipe_to_vf50
+    from app.model.mediapipe_face import get_detector
+except ModuleNotFoundError:
+    from face_vf50.backend.app.model.mapper import resample_polyline, map_mediapipe_to_vf50
+    from face_vf50.backend.app.model.mediapipe_face import get_detector
 
 
 class TestMapper(unittest.TestCase):

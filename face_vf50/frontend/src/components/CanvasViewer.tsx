@@ -1,6 +1,11 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import type { FrameDetail, Keypoint } from '../types';
-import { SKELETONS, ANCHOR_POINTS, getPointColor } from '../vf50_constants';
+import {
+  SKELETONS,
+  ANCHOR_POINTS,
+  POINT_ANATOMY_NAMES,
+  getPointColor,
+} from '../vf50_constants';
 import { getImageUrl } from '../api';
 
 interface CanvasViewerProps {
@@ -17,6 +22,9 @@ interface CanvasViewerProps {
   showAnchors: boolean;
   setShowAnchors: (v: boolean) => void;
   highlightedPointIds?: Set<number>;
+  selectedPointId?: number | null;
+  onSelectPoint?: (pointId: number | null) => void;
+  onSetPointSource?: (pointId: number, source: 'human' | 'model') => void;
 }
 
 export const CanvasViewer: React.FC<CanvasViewerProps> = ({
@@ -33,11 +41,15 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
   showAnchors,
   setShowAnchors,
   highlightedPointIds,
+  selectedPointId,
+  onSelectPoint,
+  onSetPointSource,
 }) => {
   const [zoom, setZoom] = useState<number>(1.0);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [hasDragged, setHasDragged] = useState<boolean>(false);
   const [hoveredPoint, setHoveredPoint] = useState<Keypoint | null>(null);
   const [imgDims, setImgDims] = useState<{ w: number; h: number }>({ w: 1280, h: 720 });
 
@@ -81,7 +93,7 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
     });
   }, []);
 
-  // Mouse wheel zoom: Smooth, gentle step factor (~4.5%) with dampened focal point towards center
+  // Mouse wheel zoom
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     if (!containerRef.current) return;
@@ -91,20 +103,15 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    // Gentle zoom factor: ~4.5% per notch (substantially smoother than previous 15%)
-    // Normalized for both discrete mouse wheel notches and continuous trackpads
     const delta = Math.max(-100, Math.min(100, e.deltaY));
     const zoomFactor = Math.exp(-delta * 0.00045);
 
-    // Dampened focal point: blend 65% mouse position with 35% viewport center
-    // This prevents extreme edge flinging/drift while keeping cursor-focused zoom feel
     const focalX = mouseX * 0.65 + centerX * 0.35;
     const focalY = mouseY * 0.65 + centerY * 0.35;
 
     zoomAroundPoint(focalX, focalY, zoomFactor);
   };
 
-  // Button Zoom: Strictly anchored to the dead-center of the viewport with gentle 1.12 step
   const handleZoomIn = () => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -121,13 +128,19 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button === 0) {
       setIsDragging(true);
+      setHasDragged(false);
       setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
     }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (isDragging) {
-      setPan({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+      const newPanX = e.clientX - dragStart.x;
+      const newPanY = e.clientY - dragStart.y;
+      if (Math.hypot(newPanX - pan.x, newPanY - pan.y) > 3) {
+        setHasDragged(true);
+      }
+      setPan({ x: newPanX, y: newPanY });
     }
   };
 
@@ -135,70 +148,107 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
     setIsDragging(false);
   };
 
-  // Collect points involved in violations
-  const violationPointIds = useMemo(() => {
-    const ids = new Set<number>();
-    if (frame?.rule_violations) {
-      frame.rule_violations.forEach((v) => {
-        if (v.code !== 'R02' && v.points && v.points.length > 0 && v.points.length < 25) {
-          v.points.forEach((p) => ids.add(p));
-        }
-      });
+  const humanKpts = frame?.human_keypoints || {};
+  const modelKpts = frame?.model_keypoints || {};
+  const pointSources = frame?.point_sources || {};
+
+  // Build SVG polygon/polyline path from a range of points
+  const buildSkeletonPath = (
+    kpts: Record<string, Keypoint>,
+    range: [number, number],
+    closed: boolean
+  ): string => {
+    const coords: [number, number][] = [];
+    for (let i = range[0]; i <= range[1]; i++) {
+      const pt = kpts[i] || kpts[String(i)];
+      if (pt && pt.x !== null && pt.y !== null && pt.state !== 'outside') {
+        coords.push([pt.x, pt.y]);
+      }
     }
-    return ids;
+    if (coords.length < 2) return '';
+    const d = coords.map((c, idx) => `${idx === 0 ? 'M' : 'L'} ${c[0]} ${c[1]}`).join(' ');
+    return closed ? `${d} Z` : d;
+  };
+
+  // Collect violation point IDs for prominent highlight
+  const violationPointIds = useMemo(() => {
+    const s = new Set<number>();
+    if (!frame?.rule_violations) return s;
+    for (const v of frame.rule_violations) {
+      if (v.points) {
+        for (const p of v.points) {
+          s.add(p);
+        }
+      }
+    }
+    return s;
   }, [frame?.rule_violations]);
+
+  // Selected Point Object
+  const selectedPointObj = useMemo(() => {
+    if (selectedPointId === null || selectedPointId === undefined) return null;
+    const h = humanKpts[selectedPointId] || humanKpts[String(selectedPointId)];
+    const m = modelKpts[selectedPointId] || modelKpts[String(selectedPointId)];
+    const isAnchor = ANCHOR_POINTS.has(selectedPointId);
+    const maxTolPct = isAnchor ? 3.0 : 5.0;
+    let distPx: number | null = null;
+    let pctIod: number | null = null;
+    let isExceeded = false;
+
+    if (h && m && h.x !== null && h.y !== null && m.x !== null && m.y !== null) {
+      distPx = Math.hypot(h.x - m.x, h.y - m.y);
+      if (frame?.iod && frame.iod > 0) {
+        pctIod = (distPx / frame.iod) * 100;
+        isExceeded = pctIod > maxTolPct;
+      }
+    }
+
+    const currentSource = pointSources[String(selectedPointId)] || pointSources[selectedPointId] || 'human';
+
+    return {
+      id: selectedPointId,
+      name: POINT_ANATOMY_NAMES[selectedPointId] || `Điểm #${selectedPointId}`,
+      isAnchor,
+      distPx,
+      pctIod,
+      isExceeded,
+      currentSource,
+      h,
+      m,
+    };
+  }, [selectedPointId, humanKpts, modelKpts, pointSources, frame?.iod]);
 
   if (!frame) {
     return (
-      <div className="panel-center" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '32px', marginBottom: '8px' }}>🖼️</div>
-          <p style={{ fontSize: '0.88rem' }}>Chọn một khung hình từ danh sách bên trái để bắt đầu kiểm định</p>
+      <div className="canvas-wrapper">
+        <div className="canvas-empty-state">
+          <div style={{ fontSize: '28px', color: 'var(--text-muted)' }}>🎯</div>
+          <div style={{ fontWeight: 600 }}>Chưa chọn khung hình kiểm tra</div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            Vui lòng nhấp chọn một khung hình từ danh sách bên trái
+          </div>
         </div>
       </div>
     );
   }
 
   const imageUrl = getImageUrl(sessionId, frame.image_filename);
-  const humanKpts = frame.human_keypoints || {};
-  const modelKpts = frame.model_keypoints || {};
 
-  const iod = Math.max(12, frame.iod || 96);
-  const ptRadius = Math.max(1.0, Math.min(4.0, iod * 0.035));
-  const anchorRadius = ptRadius * 1.45;
-  const violationRadius = ptRadius * 1.9;
-  const strokeWidthLine = Math.max(0.7, Math.min(2.2, iod * 0.02));
-  const modelRadius = ptRadius * 0.75;
-  const labelFontSize = Math.max(6, Math.min(10, Math.round(iod * 0.08)));
-
-  const buildSkeletonPath = (kpts: Record<string, Keypoint>, pointRange: [number, number], closed: boolean) => {
-    const [start, end] = pointRange;
-    let path = '';
-    let first = true;
-    for (let i = start; i <= end; i++) {
-      const pt = kpts[i.toString()] || kpts[i as unknown as string];
-      if (pt && pt.x !== null && pt.y !== null && pt.state !== 'outside') {
-        if (first) {
-          path += `M ${pt.x} ${pt.y} `;
-          first = false;
-        } else {
-          path += `L ${pt.x} ${pt.y} `;
-        }
-      }
-    }
-    if (closed && !first) {
-      path += 'Z';
-    }
-    return path;
-  };
+  // Scaled stroke widths
+  const ptRadius = Math.max(1.8, Math.min(3.6, 2.5 / zoom));
+  const anchorRadius = Math.max(2.4, Math.min(4.8, 3.5 / zoom));
+  const modelRadius = Math.max(1.4, Math.min(2.8, 1.8 / zoom));
+  const violationRadius = Math.max(3.8, Math.min(8.0, 5.0 / zoom));
+  const strokeWidthLine = Math.max(0.7, Math.min(1.8, 1.1 / zoom));
+  const labelFontSize = Math.max(7, Math.min(12, 9 / zoom));
 
   return (
-    <div className="panel-center">
-      {/* Top Floating Control Bar */}
-      <div className="canvas-top-bar">
-        {/* Layer Toggles */}
+    <div className="canvas-wrapper">
+      {/* Top Floating Glass Toolbar */}
+      <div className="canvas-toolbar">
         <div className="canvas-layer-toggles">
           <button
+            type="button"
             className={`layer-toggle-btn ${showHuman ? 'active' : ''}`}
             onClick={() => setShowHuman(!showHuman)}
             title="Bật/tắt nhãn người gán tay (Màu xanh lá)"
@@ -206,6 +256,7 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
             <span>👁</span> Gán tay
           </button>
           <button
+            type="button"
             className={`layer-toggle-btn ${showModel ? 'active' : ''}`}
             onClick={() => setShowModel(!showModel)}
             title="Bật/tắt điểm dự đoán tham chiếu AI (MediaPipe)"
@@ -213,6 +264,7 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
             <span>🤖</span> Model AI
           </button>
           <button
+            type="button"
             className={`layer-toggle-btn ${showVectors ? 'active' : ''}`}
             onClick={() => setShowVectors(!showVectors)}
             title="Bật/tắt đường véc-tơ lệch tọa độ giữa người và AI"
@@ -220,6 +272,7 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
             <span>↗</span> Vector lệch
           </button>
           <button
+            type="button"
             className={`layer-toggle-btn ${showAnchors ? 'active' : ''}`}
             onClick={() => setShowAnchors(!showAnchors)}
             title="Bật/tắt làm nổi bật 12 điểm neo giải phẫu"
@@ -227,6 +280,7 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
             <span>⭐</span> 12 Điểm neo
           </button>
           <button
+            type="button"
             className={`layer-toggle-btn ${showLabels ? 'active' : ''}`}
             onClick={() => setShowLabels(!showLabels)}
             title="Bật/tắt số thứ tự điểm (0 - 49)"
@@ -237,16 +291,17 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
 
         {/* Zoom & Fit Controls */}
         <div className="canvas-controls-group">
-          <button className="btn-outline" onClick={handleZoomOut} title="Thu nhỏ (-)" style={{ padding: '3px 8px' }}>
+          <button type="button" className="btn-outline" onClick={handleZoomOut} title="Thu nhỏ (-)" style={{ padding: '3px 8px' }}>
             -
           </button>
           <span style={{ fontSize: '0.74rem', fontFamily: 'var(--font-mono)', minWidth: '42px', textAlign: 'center' }}>
             {Math.round(zoom * 100)}%
           </span>
-          <button className="btn-outline" onClick={handleZoomIn} title="Phóng to (+)" style={{ padding: '3px 8px' }}>
+          <button type="button" className="btn-outline" onClick={handleZoomIn} title="Phóng to (+)" style={{ padding: '3px 8px' }}>
             +
           </button>
           <button
+            type="button"
             className="btn-outline"
             onClick={() => fitToCenter()}
             title="Tự động căn giữa và vừa vặn màn hình"
@@ -257,7 +312,7 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
         </div>
       </div>
 
-      {/* Main Viewport Stage - Perfectly Centered on Light Studio Gray Workbench */}
+      {/* Main Viewport Stage */}
       <div
         ref={containerRef}
         className="canvas-screen"
@@ -266,6 +321,11 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onClick={() => {
+          if (!hasDragged && onSelectPoint) {
+            onSelectPoint(null);
+          }
+        }}
       >
         <div
           className="canvas-stage"
@@ -273,7 +333,7 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
           }}
         >
-          {/* Base Face Image with elevation & crisp border */}
+          {/* Base Face Image */}
           <img
             src={imageUrl}
             alt={frame.image_filename}
@@ -390,16 +450,46 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
                 const isAnchor = showAnchors && ANCHOR_POINTS.has(pt.id);
                 const isViolated = violationPointIds.has(pt.id);
                 const isHighlighted = highlightedPointIds?.has(pt.id);
+                const isSelected = selectedPointId === pt.id;
+                const isModelSource = pointSources[String(pt.id)] === 'model';
 
                 return (
                   <g
                     key={`human_pt_${pt.id}`}
                     style={{ pointerEvents: 'auto', cursor: 'pointer' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onSelectPoint) {
+                        onSelectPoint(pt.id);
+                      }
+                    }}
                     onMouseEnter={() => setHoveredPoint(pt)}
                     onMouseLeave={() => setHoveredPoint(null)}
                   >
+                    {/* Ring for Selected Point */}
+                    {isSelected && (
+                      <circle
+                        cx={pt.x}
+                        cy={pt.y}
+                        r={violationRadius * 1.8}
+                        fill="none"
+                        stroke="#2563EB"
+                        strokeWidth={strokeWidthLine * 2.2}
+                        strokeDasharray="4,2"
+                      >
+                        <animateTransform
+                          attributeName="transform"
+                          type="rotate"
+                          from={`0 ${pt.x} ${pt.y}`}
+                          to={`360 ${pt.x} ${pt.y}`}
+                          dur="6s"
+                          repeatCount="indefinite"
+                        />
+                      </circle>
+                    )}
+
                     {/* Pulsing ring for violation / highlighted point */}
-                    {(isViolated || isHighlighted) && (
+                    {(isViolated || isHighlighted) && !isSelected && (
                       <circle
                         cx={pt.x}
                         cy={pt.y}
@@ -423,9 +513,9 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
                       cx={pt.x}
                       cy={pt.y}
                       r={isAnchor ? anchorRadius : ptRadius}
-                      fill={isViolated ? '#EF4444' : getPointColor(pt.id)}
-                      stroke={isAnchor ? '#FBBF24' : '#FFFFFF'}
-                      strokeWidth={isAnchor ? 1.6 : 0.75}
+                      fill={isViolated ? '#EF4444' : isModelSource ? '#0284C7' : getPointColor(pt.id)}
+                      stroke={isSelected ? '#2563EB' : isAnchor ? '#FBBF24' : '#FFFFFF'}
+                      strokeWidth={isSelected ? 2.0 : isAnchor ? 1.6 : 0.75}
                     />
 
                     {/* Point Label Number */}
@@ -448,8 +538,8 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
           </svg>
         </div>
 
-        {/* Hover Tooltip */}
-        {hoveredPoint && hoveredPoint.x !== null && hoveredPoint.y !== null && (
+        {/* Hover Tooltip (When NOT selecting a point) */}
+        {!selectedPointId && hoveredPoint && hoveredPoint.x !== null && hoveredPoint.y !== null && (
           <div
             style={{
               position: 'absolute',
@@ -458,7 +548,7 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
               background: 'rgba(15, 23, 42, 0.95)',
               border: '1px solid var(--border-strong)',
               borderRadius: '6px',
-              padding: '4px 8px',
+              padding: '5px 9px',
               fontSize: '11px',
               color: 'white',
               boxShadow: 'var(--shadow-md)',
@@ -481,14 +571,15 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
               }
 
               const isExceeded = normPct !== null && parseFloat(normPct) > maxTolPct;
+              const isModel = pointSources[String(hoveredPoint.id)] === 'model';
 
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                   <div style={{ fontWeight: 700, color: getPointColor(hoveredPoint.id), fontSize: '11.5px' }}>
-                    Điểm #{hoveredPoint.id} {isAnchor ? '⭐ (Điểm Neo ≤3% IOD)' : '(Điểm Viền ≤5% IOD)'}
+                    #{hoveredPoint.id}: {POINT_ANATOMY_NAMES[hoveredPoint.id] || ''} {isAnchor ? '⭐ (Neo)' : ''}
                   </div>
                   <div style={{ color: '#CBD5E1', fontSize: '10.5px' }}>
-                    Tọa độ: ({hoveredPoint.x.toFixed(1)}, {hoveredPoint.y.toFixed(1)}) &middot; Trạng thái: <span style={{ color: hoveredPoint.state === 'occluded' ? '#FBBF24' : hoveredPoint.state === 'outside' ? '#F87171' : '#34D399', fontWeight: 600 }}>{hoveredPoint.state || 'visible'}</span>
+                    Nguồn: <strong style={{ color: isModel ? '#38BDF8' : '#34D399' }}>{isModel ? '🤖 Model AI' : '👤 Người'}</strong>
                   </div>
                   {distPx !== null && (
                     <div
@@ -501,12 +592,91 @@ export const CanvasViewer: React.FC<CanvasViewerProps> = ({
                         fontWeight: 600,
                       }}
                     >
-                      Sai lệch: {distPx.toFixed(1)}px ({normPct}% IOD) {isExceeded ? '⚠️ Vượt dung sai' : '✓ Chuẩn'}
+                      Lệch: {distPx.toFixed(1)}px ({normPct}% IOD) {isExceeded ? '⚠️ Vượt dung sai' : '✓ Chuẩn'}
                     </div>
                   )}
+                  <div style={{ fontSize: '9.5px', color: '#94A3B8', marginTop: '1px' }}>
+                    💡 Click điểm để chọn nhanh nguồn Người / AI
+                  </div>
                 </div>
               );
             })()}
+          </div>
+        )}
+
+        {/* Interactive Floating Point Popover when a point is SELECTED */}
+        {selectedPointObj && selectedPointObj.h && selectedPointObj.h.x !== null && selectedPointObj.h.y !== null && (
+          <div
+            className="canvas-point-popover"
+            style={{
+              position: 'absolute',
+              left: Math.max(16, Math.min(pan.x + selectedPointObj.h.x * zoom + 16, (containerRef.current?.clientWidth || 800) - 270)),
+              top: Math.max(50, Math.min(pan.y + selectedPointObj.h.y * zoom - 65, (containerRef.current?.clientHeight || 600) - 170)),
+              zIndex: 110,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Popover Header */}
+            <div className="popover-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span
+                  className="point-badge"
+                  style={{ background: getPointColor(selectedPointObj.id), color: '#ffffff' }}
+                >
+                  #{selectedPointObj.id}
+                </span>
+                <span style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--text-primary)' }}>
+                  {selectedPointObj.name}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn-popover-close"
+                onClick={() => onSelectPoint && onSelectPoint(null)}
+                title="Đóng bảng chọn điểm"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Popover Details */}
+            <div className="popover-body">
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                <span>Đang dùng nguồn:</span>
+                <strong style={{ color: selectedPointObj.currentSource === 'model' ? 'var(--cyan)' : 'var(--success)' }}>
+                  {selectedPointObj.currentSource === 'model' ? '🤖 Model AI' : '👤 Nhãn Người'}
+                </strong>
+              </div>
+
+              {selectedPointObj.distPx !== null && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  <span>Sai lệch so với AI:</span>
+                  <span style={{ color: selectedPointObj.isExceeded ? 'var(--danger)' : 'var(--success)', fontWeight: 700 }}>
+                    {selectedPointObj.distPx.toFixed(1)}px ({selectedPointObj.pctIod?.toFixed(1)}% IOD)
+                  </span>
+                </div>
+              )}
+
+              {/* Action Buttons: 👤 Giữ Người vs 🤖 Dùng AI */}
+              <div className="popover-actions">
+                <button
+                  type="button"
+                  className={`btn-popover-choice human ${selectedPointObj.currentSource === 'human' ? 'active' : ''}`}
+                  onClick={() => onSetPointSource && onSetPointSource(selectedPointObj.id, 'human')}
+                  title="Chọn giữ tọa độ dán nhãn của Người"
+                >
+                  👤 Giữ Người
+                </button>
+                <button
+                  type="button"
+                  className={`btn-popover-choice model ${selectedPointObj.currentSource === 'model' ? 'active' : ''}`}
+                  onClick={() => onSetPointSource && onSetPointSource(selectedPointObj.id, 'model')}
+                  title="Chọn lấy tọa độ gợi ý của Model AI"
+                >
+                  🤖 Dùng AI
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

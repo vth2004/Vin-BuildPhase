@@ -39,6 +39,8 @@ export interface FrameDetail extends FrameListItem {
   has_model_prediction: number;
   human_keypoints: Record<string, Keypoint>;
   model_keypoints: Record<string, Keypoint>;
+  initial_human_keypoints?: Record<string, Keypoint>;
+  point_sources?: Record<string, 'human' | 'model'>;
 }
 
 export interface SessionInfo {

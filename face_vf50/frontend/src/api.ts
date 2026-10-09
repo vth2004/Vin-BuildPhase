@@ -146,3 +146,20 @@ export async function batchApplyModelFix(
   return res.json();
 }
 
+export async function setPointSource(
+  sessionId: string,
+  frameIndex: number,
+  pointId: number,
+  source: 'human' | 'model'
+): Promise<FrameDetail> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}/frames/${frameIndex}/point-source`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ point_id: pointId, source }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to update point source' }));
+    throw new Error(err.detail || 'Failed to update point source');
+  }
+  return res.json();
+}

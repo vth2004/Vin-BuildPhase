@@ -61,26 +61,42 @@ def safe_extract_images(upload: UploadFile, destination: Path) -> tuple[list[str
 
                 suffix = path.suffix.lower()
 
-                # Tự động bắt file annotation trong ZIP (annotations.xml, default.xml, *.json)
+                # Tự động bắt file annotation trong ZIP (annotations.xml, default.xml, *.json, person_keypoints_default.json)
                 if suffix in ANNOTATION_EXTENSIONS:
                     score = 0
                     fn_lower = path.name.lower()
-                    if "annot" in fn_lower:
+                    full_lower = str(path).lower()
+
+                    # Bỏ qua các file cấu hình / metadata không phải nhãn
+                    if fn_lower in {"package.json", "tsconfig.json", "manifest.json", "project.json"}:
+                        continue
+
+                    if "keypoint" in fn_lower or "keypoints" in fn_lower:
+                        score += 30
+                    if "coco" in fn_lower or "coco" in full_lower:
+                        score += 25
+                    if "annot" in fn_lower or "annot" in full_lower:
+                        score += 20
+                    if "person" in fn_lower:
+                        score += 15
+                    if "default" in fn_lower:
                         score += 10
                     if suffix == ".xml":
+                        score += 8
+                    if suffix == ".json":
                         score += 5
-                    if "default" in fn_lower:
-                        score += 3
-                    
+
                     if score > best_ann_score or annotation_bytes is None:
                         try:
                             with archive.open(info) as ann_src:
-                                annotation_bytes = ann_src.read()
-                                best_ann_score = score
-                                # Lưu dự phòng vào thư mục session
-                                ann_target = destination.parent / path.name
-                                with ann_target.open("wb") as ann_dst:
-                                    ann_dst.write(annotation_bytes)
+                                content = ann_src.read()
+                                if len(content) > 5:
+                                    annotation_bytes = content
+                                    best_ann_score = score
+                                    # Lưu dự phòng vào thư mục session
+                                    ann_target = destination.parent / path.name
+                                    with ann_target.open("wb") as ann_dst:
+                                        ann_dst.write(annotation_bytes)
                         except Exception:
                             pass
                     continue

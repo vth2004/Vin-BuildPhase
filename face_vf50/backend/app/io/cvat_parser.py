@@ -5,6 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import unquote
 from fastapi import HTTPException
 
 # Bảng ánh xạ ID sublabel từ JSON cấu hình CVAT constructor người dùng cung cấp -> VF-50 Point ID
@@ -93,17 +94,23 @@ def resolve_point_id(
     Quy đổi thông minh ID điểm nhãn từ CVAT XML / JSON về định danh 0..49 của VinFast VF-50:
     1. Kiểm tra ID sublabel gốc của CVAT (117..172)
     2. Nếu thuộc skeleton cụ thể: tính theo offset skeleton (start + local_index) hoặc kiểm tra dải toàn cục
-    3. Điểm phẳng: kiểm tra số nguyên 0..49
+    3. Trích xuất số nguyên từ raw_label (ví dụ: 'pt_15', 'point_0', '15')
+    4. Fallback theo chỉ số index_in_skel nếu hợp lệ (0..49)
     """
     # 1. Kiểm tra nếu có label_id hoặc raw_label trùng ID sublabel CVAT (117..172)
     for cand in (label_id, raw_label):
-        if cand:
+        if cand is not None and str(cand).strip():
+            s = str(cand).strip()
             try:
-                cand_int = int(str(cand).strip())
+                cand_int = int(s)
                 if cand_int in CVAT_SUBLABEL_ID_TO_VF50:
                     return CVAT_SUBLABEL_ID_TO_VF50[cand_int]
             except ValueError:
-                pass
+                digits = re.findall(r"\d+", s)
+                if digits:
+                    val = int(digits[0])
+                    if val in CVAT_SUBLABEL_ID_TO_VF50:
+                        return CVAT_SUBLABEL_ID_TO_VF50[val]
 
     # 2. Xử lý theo skeleton
     norm_skel = SKELETON_ALIASES.get(skel_label.strip().lower(), skel_label.strip().lower())
@@ -113,10 +120,11 @@ def resolve_point_id(
         start = spec["start"]
         count = spec["count"]
 
-        # Parse raw_label nếu là số
-        if raw_label:
-            try:
-                val = int(str(raw_label).strip())
+        # Parse raw_label nếu có số
+        if raw_label is not None and str(raw_label).strip():
+            digits = re.findall(r"\d+", str(raw_label))
+            if digits:
+                val = int(digits[0])
                 # Trường hợp A: Đã là ID toàn cục chính xác cho skeleton này (vd: 5..9 cho longmayphai)
                 if start <= val < start + count:
                     return val
@@ -126,21 +134,22 @@ def resolve_point_id(
                 # Trường hợp C: Số nguyên 0..49 hợp lệ
                 if 0 <= val < 50:
                     return val
-            except ValueError:
-                pass
 
         # Nếu không có raw_label hoặc không parse được số, dùng thứ tự trong skeleton
         if 0 <= index_in_skel < count:
             return start + index_in_skel
 
-    # 3. Khi không có skeleton hoặc skeleton không xác định
-    if raw_label:
-        try:
-            val = int(str(raw_label).strip())
+    # 3. Khi không có skeleton hoặc skeleton không xác định (ví dụ category là "face", "person", "vf50")
+    if raw_label is not None and str(raw_label).strip():
+        digits = re.findall(r"\d+", str(raw_label))
+        if digits:
+            val = int(digits[0])
             if 0 <= val < 50:
                 return val
-        except ValueError:
-            pass
+
+    # 4. Fallback theo index_in_skel nếu trong khoảng 0..49
+    if 0 <= index_in_skel < 50:
+        return index_in_skel
 
     return None
 
@@ -372,30 +381,58 @@ def parse_annotation_payload(content: bytes) -> list[dict[str, Any]]:
 
     # 2. Định dạng COCO Keypoints
     if isinstance(data, dict) and "images" in data and "annotations" in data:
-        categories_by_id = {c.get("id"): c for c in data.get("categories", [])}
-        img_dict = {img.get("id"): img for img in data["images"]}
-        annots_by_img: dict[Any, list[Any]] = {}
+        categories_by_id: dict[Any, dict[str, Any]] = {}
+        for c in data.get("categories", []):
+            cid = c.get("id")
+            if cid is not None:
+                categories_by_id[cid] = c
+                categories_by_id[str(cid)] = c
+
+        annots_by_img: dict[str, list[Any]] = {}
         for annot in data.get("annotations", []):
             i_id = annot.get("image_id")
-            if i_id not in annots_by_img:
-                annots_by_img[i_id] = []
-            annots_by_img[i_id].append(annot)
+            if i_id is not None:
+                s_id = str(i_id)
+                if s_id not in annots_by_img:
+                    annots_by_img[s_id] = []
+                annots_by_img[s_id].append(annot)
 
-        for img_id, img_info in img_dict.items():
-            fn = img_info.get("file_name", "").replace("\\", "/")
-            w = img_info.get("width", 1280)
-            h = img_info.get("height", 720)
+        for img_info in data["images"]:
+            img_id = img_info.get("id")
+            str_img_id = str(img_id) if img_id is not None else ""
+            raw_fn = img_info.get("file_name", "")
+            fn = unquote(raw_fn).replace("\\", "/")
+            w = int(img_info.get("width", 1280))
+            h = int(img_info.get("height", 720))
             kpts_by_id: dict[int, dict[str, Any]] = {}
 
-            for annot in annots_by_img.get(img_id, []):
+            # Tra cứu annotations theo img_id (cả string, int, hoặc khớp tên file)
+            matched_annots = annots_by_img.get(str_img_id, [])
+            if not matched_annots and fn in annots_by_img:
+                matched_annots = annots_by_img[fn]
+            if not matched_annots and Path(fn).name in annots_by_img:
+                matched_annots = annots_by_img[Path(fn).name]
+
+            # Fallback nếu cả file chỉ có 1 ảnh
+            if not matched_annots and len(data["images"]) == 1:
+                matched_annots = data.get("annotations", [])
+
+            for annot in matched_annots:
                 cat_id = annot.get("category_id")
-                cat = categories_by_id.get(cat_id, {})
+                cat = categories_by_id.get(cat_id) or categories_by_id.get(str(cat_id)) or {}
+                if not cat and len(data.get("categories", [])) == 1:
+                    cat = data["categories"][0]
+
                 cat_name = cat.get("name", "")
                 cat_kpts = cat.get("keypoints", [])
                 raw_kpts = annot.get("keypoints", [])
 
                 if not isinstance(raw_kpts, list) or not raw_kpts:
                     continue
+
+                # Đọc attributes (ví dụ occluded cấp annotation từ CVAT)
+                annot_attrs = annot.get("attributes", {})
+                is_annot_occluded = annot_attrs.get("occluded", False) if isinstance(annot_attrs, dict) else False
 
                 # Xử lý nếu raw_kpts là danh sách dict [{"x": ..., "y": ...}]
                 if isinstance(raw_kpts[0], dict):
@@ -407,11 +444,12 @@ def parse_annotation_payload(content: bytes) -> list[dict[str, Any]]:
                             index_in_skel=idx,
                         )
                         if pt_id is not None and 0 <= pt_id < 50:
+                            state = pt_dict.get("state", "occluded" if is_annot_occluded else "visible")
                             kpts_by_id[pt_id] = {
                                 "id": pt_id,
                                 "x": pt_dict.get("x"),
                                 "y": pt_dict.get("y"),
-                                "state": pt_dict.get("state", "visible"),
+                                "state": state,
                                 "skeleton": cat_name,
                             }
                     continue
@@ -427,7 +465,7 @@ def parse_annotation_payload(content: bytes) -> list[dict[str, Any]]:
                                 index_in_skel=idx,
                             )
                             if pt_id is not None and 0 <= pt_id < 50:
-                                vis = pt_arr[2] if len(pt_arr) >= 3 else 2
+                                vis = pt_arr[2] if len(pt_arr) >= 3 else (1 if is_annot_occluded else 2)
                                 st = "outside" if vis == 0 else ("occluded" if vis == 1 else "visible")
                                 kpts_by_id[pt_id] = {
                                     "id": pt_id,
@@ -452,7 +490,7 @@ def parse_annotation_payload(content: bytes) -> list[dict[str, Any]]:
                     try:
                         px = float(raw_kpts[base_i])
                         py = float(raw_kpts[base_i + 1])
-                        vis = int(raw_kpts[base_i + 2]) if (step == 3 and base_i + 2 < len(raw_kpts)) else 2
+                        vis = int(raw_kpts[base_i + 2]) if (step == 3 and base_i + 2 < len(raw_kpts)) else (1 if is_annot_occluded else 2)
                     except (ValueError, TypeError, IndexError):
                         continue
 

@@ -199,24 +199,34 @@ async def upload_dataset(
         ann_bytes = zip_ann_bytes
 
     if ann_bytes is not None and len(ann_bytes) > 0:
-        parsed_list = parse_annotation_payload(ann_bytes)
-        for p_idx, item in enumerate(parsed_list):
-            kpts = item.get("keypoints", {})
-            raw_fn = item.get("file_name", "")
-            fn = Path(raw_fn).name
-            stem = Path(raw_fn).stem
-            if fn:
-                human_by_name[fn] = kpts
-                human_by_name[fn.lower()] = kpts
-            if stem:
-                human_by_name[stem] = kpts
-                human_by_name[stem.lower()] = kpts
-            human_by_idx[p_idx] = kpts
-            if "frame_index" in item:
-                human_by_idx[item["frame_index"]] = kpts
+        try:
+            parsed_list = parse_annotation_payload(ann_bytes)
+            for p_idx, item in enumerate(parsed_list):
+                kpts = item.get("keypoints", {})
+                raw_fn = item.get("file_name", "")
+                fn = Path(raw_fn).name
+                stem = Path(raw_fn).stem
+                if fn:
+                    human_by_name[fn] = kpts
+                    human_by_name[fn.lower()] = kpts
+                if stem:
+                    human_by_name[stem] = kpts
+                    human_by_name[stem.lower()] = kpts
+                human_by_idx[p_idx] = kpts
+                if "frame_index" in item:
+                    human_by_idx[item["frame_index"]] = kpts
+        except Exception as e:
+            print(f"[WARNING] Annotation parsing error: {e}")
 
     # 3. Process each frame: Run MediaPipe & QA Rules
-    detector = get_detector()
+    detector = None
+    if run_model:
+        try:
+            detector = get_detector()
+        except Exception as e:
+            print(f"[WARNING] MediaPipe detector initialization failed: {e}")
+            detector = None
+
     frames_to_save: List[Dict[str, Any]] = []
     total_issues = 0
     total_nme = 0.0
@@ -243,20 +253,22 @@ async def upload_dataset(
         if not human_kpts and len(extracted_paths) == 1 and len(human_by_idx) >= 1:
             human_kpts = list(human_by_idx.values())[0]
 
-
         # Inference with single model (smartly focus on annotated face if human_kpts available)
         model_kpts: Dict[int, Dict[str, Any]] = {}
-        if run_model:
-            detection = detector.detect_landmarks(img_bgr, target_keypoints=human_kpts if human_kpts else None)
-            if detection is not None:
-                vf50_coords, _ = detection
-                for p_id, (px, py) in enumerate(vf50_coords):
-                    model_kpts[p_id] = {
-                        "id": p_id,
-                        "x": float(px),
-                        "y": float(py),
-                        "state": "visible",
-                    }
+        if run_model and detector is not None:
+            try:
+                detection = detector.detect_landmarks(img_bgr, target_keypoints=human_kpts if human_kpts else None)
+                if detection is not None:
+                    vf50_coords, _ = detection
+                    for p_id, (px, py) in enumerate(vf50_coords):
+                        model_kpts[p_id] = {
+                            "id": p_id,
+                            "x": float(px),
+                            "y": float(py),
+                            "state": "visible",
+                        }
+            except Exception as e:
+                print(f"[WARNING] Model inference failed for frame {idx} ({img_path.name}): {e}")
 
         # Check guideline rules
         violations_raw = []
@@ -418,6 +430,11 @@ class ApplyModelFixPayload(BaseModel):
     point_ids: Optional[List[int]] = None
 
 
+class SetPointSourcePayload(BaseModel):
+    point_id: int
+    source: str  # 'human' | 'model'
+
+
 class BatchApplyModelFixPayload(BaseModel):
     only_violated: bool = True
     min_nme: float = 0.035
@@ -499,6 +516,93 @@ def generate_cleaned_json(session_info: Dict[str, Any], frames_data: List[Dict[s
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
+@app.post("/api/sessions/{session_id}/frames/{frame_index}/point-source")
+def set_point_source(
+    session_id: str,
+    frame_index: int,
+    payload: SetPointSourcePayload,
+) -> Dict[str, Any]:
+    detail = get_frame_detail(session_id, frame_index)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Frame not found")
+
+    human_kpts = detail.get("human_keypoints", {})
+    model_kpts = detail.get("model_keypoints", {})
+    initial_human_kpts = detail.get("initial_human_keypoints") or copy.deepcopy(human_kpts)
+    point_sources = detail.get("point_sources") or {str(i): "human" for i in range(50)}
+
+    pid = payload.point_id
+    pid_str = str(pid)
+    source = payload.source.lower().strip()
+
+    if source not in ("human", "model"):
+        raise HTTPException(status_code=400, detail="Nguồn điểm chỉ có thể là 'human' hoặc 'model'")
+
+    if source == "model":
+        m = model_kpts.get(pid_str) or model_kpts.get(pid)
+        if not m or m.get("x") is None or m.get("y") is None:
+            raise HTTPException(status_code=400, detail=f"Không có tọa độ Model AI cho điểm {pid}")
+        key = pid if pid in human_kpts else pid_str
+        if key not in human_kpts:
+            human_kpts[key] = {"id": pid, "state": "visible"}
+        human_kpts[key]["x"] = float(m["x"])
+        human_kpts[key]["y"] = float(m["y"])
+        if human_kpts[key].get("state") == "outside":
+            human_kpts[key]["state"] = "visible"
+        point_sources[pid_str] = "model"
+    else:  # human
+        init_pt = initial_human_kpts.get(pid_str) or initial_human_kpts.get(pid)
+        if init_pt and init_pt.get("x") is not None and init_pt.get("y") is not None:
+            key = pid if pid in human_kpts else pid_str
+            if key not in human_kpts:
+                human_kpts[key] = {"id": pid, "state": "visible"}
+            human_kpts[key]["x"] = float(init_pt["x"])
+            human_kpts[key]["y"] = float(init_pt["y"])
+            if "state" in init_pt:
+                human_kpts[key]["state"] = init_pt["state"]
+        point_sources[pid_str] = "human"
+
+    w, h = 1280, 720
+    img_p = Path(detail.get("image_path", ""))
+    if img_p.exists():
+        im = cv2.imread(str(img_p))
+        if im is not None:
+            h, w = im.shape[:2]
+
+    violations_raw = check_all_rules(human_kpts, model_keypoints_by_id=model_kpts, image_width=w, image_height=h)
+    violations = [violation_to_dict(v) for v in violations_raw]
+    score_eval = evaluate_frame_quality(human_kpts, model_kpts)
+
+    severity_weight = sum(
+        3.0 if v.get("severity") == "critical"
+        else 2.0 if v.get("severity") == "major"
+        else 1.0
+        for v in violations
+    )
+
+    has_any_model = any(src == "model" for src in point_sources.values())
+    new_status = "fixed" if has_any_model else detail.get("status", "pending")
+
+    update_frame_full(session_id, frame_index, {
+        "human_keypoints": human_kpts,
+        "initial_human_keypoints": initial_human_kpts,
+        "point_sources": point_sources,
+        "iod": float(score_eval.get("iod", detail.get("iod", 100.0))),
+        "nme": float(score_eval.get("nme", 0.0)),
+        "rule_violations": violations,
+        "severity_score": float(severity_weight),
+        "error_count": len(violations),
+        "status": new_status,
+        "case_type": score_eval.get("case_type", "normal"),
+        "ai_reliability": float(score_eval.get("ai_reliability", 0.95)),
+        "case_label": score_eval.get("case_label", "Bình thường"),
+        "case_description": score_eval.get("case_description", ""),
+    })
+    recalculate_session_stats(session_id)
+
+    return get_frame_detail(session_id, frame_index)
+
+
 @app.post("/api/sessions/{session_id}/frames/{frame_index}/apply-model-fix")
 def apply_model_fix(
     session_id: str,
@@ -511,6 +615,9 @@ def apply_model_fix(
 
     human_kpts = detail.get("human_keypoints", {})
     model_kpts = detail.get("model_keypoints", {})
+    initial_human_kpts = detail.get("initial_human_keypoints") or copy.deepcopy(human_kpts)
+    point_sources = detail.get("point_sources") or {str(i): "human" for i in range(50)}
+
     if not model_kpts:
         raise HTTPException(status_code=400, detail="Không có tọa độ Model AI để áp dụng")
 
@@ -539,6 +646,7 @@ def apply_model_fix(
             human_kpts[key]["y"] = float(m["y"])
             if human_kpts[key].get("state") == "outside":
                 human_kpts[key]["state"] = "visible"
+            point_sources[str(pid)] = "model"
 
     w, h = 1280, 720
     img_p = Path(detail.get("image_path", ""))
@@ -560,6 +668,8 @@ def apply_model_fix(
 
     update_frame_full(session_id, frame_index, {
         "human_keypoints": human_kpts,
+        "initial_human_keypoints": initial_human_kpts,
+        "point_sources": point_sources,
         "iod": float(score_eval.get("iod", detail.get("iod", 100.0))),
         "nme": float(score_eval.get("nme", 0.0)),
         "rule_violations": violations,
@@ -610,6 +720,8 @@ def batch_apply_model_fix(
                 continue
 
         human_kpts = detail.get("human_keypoints", {})
+        initial_human_kpts = detail.get("initial_human_keypoints") or copy.deepcopy(human_kpts)
+        point_sources = detail.get("point_sources") or {str(i): "human" for i in range(50)}
         target_points: set[int] = set()
 
         for v in violations:
@@ -634,6 +746,7 @@ def batch_apply_model_fix(
                 human_kpts[key]["y"] = float(m["y"])
                 if human_kpts[key].get("state") == "outside":
                     human_kpts[key]["state"] = "visible"
+                point_sources[str(pid)] = "model"
 
         w, h = 1280, 720
         img_p = Path(detail.get("image_path", ""))
@@ -655,6 +768,8 @@ def batch_apply_model_fix(
 
         update_frame_full(session_id, f_idx, {
             "human_keypoints": human_kpts,
+            "initial_human_keypoints": initial_human_kpts,
+            "point_sources": point_sources,
             "iod": float(score_eval.get("iod", detail.get("iod", 100.0))),
             "nme": float(score_eval.get("nme", 0.0)),
             "rule_violations": new_violations,
@@ -678,6 +793,7 @@ def batch_apply_model_fix(
         "total_frames": len(frames_all),
         "session_stats": stats,
     }
+
 
 
 @app.get("/api/sessions/{session_id}/export/cvat-xml")
@@ -837,7 +953,10 @@ def create_sample_demo() -> Dict[str, Any]:
 
     frames_to_save = []
     total_issues = 0
-    detector = get_detector()
+    try:
+        detector = get_detector()
+    except Exception:
+        detector = None
 
     for idx, (fname, sample_file, desc, mod) in enumerate(demo_cases):
         img_path = images_folder / fname
@@ -846,7 +965,7 @@ def create_sample_demo() -> Dict[str, Any]:
         if src_sample.exists():
             img = cv2.imread(str(src_sample))
             cv2.imwrite(str(img_path), img)
-            det = detector.detect_landmarks(img)
+            det = detector.detect_landmarks(img) if detector else None
             if det:
                 vf50_det, _ = det
                 human_kpts = {

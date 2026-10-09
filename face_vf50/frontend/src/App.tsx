@@ -44,8 +44,9 @@ export const App: React.FC = () => {
   const [showVectors, setShowVectors] = useState<boolean>(true);
   const [showAnchors, setShowAnchors] = useState<boolean>(true);
 
-  // Hovered violation points highlight
+  // Hovered & Selected keypoints
   const [highlightedPoints, setHighlightedPoints] = useState<Set<number> | undefined>(undefined);
+  const [selectedPointId, setSelectedPointId] = useState<number | null>(null);
 
   // Modals & Status
   const [isUploadOpen, setIsUploadOpen] = useState<boolean>(false);
@@ -138,6 +139,7 @@ export const App: React.FC = () => {
 
   // 4. Load Frame Detail when Selected Frame Index changes
   useEffect(() => {
+    setSelectedPointId(null);
     if (!selectedSessionId || selectedFrameIndex === null) {
       setCurrentFrameDetail(null);
       return;
@@ -210,6 +212,41 @@ export const App: React.FC = () => {
     } catch (e: any) {
       console.error('Failed to apply model fix', e);
       alert('Lỗi khi sửa theo Model AI: ' + (e?.message || 'Không xác định'));
+    }
+  };
+
+  const handleSetPointSource = async (pointId: number, source: 'human' | 'model') => {
+    if (!selectedSessionId || selectedFrameIndex === null) return;
+    try {
+      const updated = await api.setPointSource(selectedSessionId, selectedFrameIndex, pointId, source);
+      setCurrentFrameDetail(updated);
+      setFrames((prev) =>
+        prev.map((f) =>
+          f.frame_index === selectedFrameIndex
+            ? {
+                ...f,
+                status: updated.status,
+                nme: updated.nme,
+                iod: updated.iod,
+                error_count: updated.error_count,
+                severity_score: updated.severity_score,
+                rule_violations: updated.rule_violations,
+                case_type: updated.case_type,
+                ai_reliability: updated.ai_reliability,
+                case_label: updated.case_label,
+              }
+            : f
+        )
+      );
+      setFeedbackMsg(
+        source === 'model'
+          ? `✓ Điểm #${pointId} đã chuyển sang dùng tọa độ Model AI!`
+          : `✓ Điểm #${pointId} đã khôi phục về nhãn Người!`
+      );
+      setTimeout(() => setFeedbackMsg(''), 3000);
+    } catch (e: any) {
+      console.error('Failed to set point source', e);
+      alert('Lỗi khi đổi nguồn điểm: ' + (e?.message || 'Không xác định'));
     }
   };
 
@@ -384,6 +421,9 @@ export const App: React.FC = () => {
           showAnchors={showAnchors}
           setShowAnchors={setShowAnchors}
           highlightedPointIds={highlightedPoints}
+          selectedPointId={selectedPointId}
+          onSelectPoint={setSelectedPointId}
+          onSetPointSource={handleSetPointSource}
         />
 
         {/* Panel 3 (Right): Inspector (Metrics & CVAT Fix Guidelines) */}
@@ -398,6 +438,9 @@ export const App: React.FC = () => {
           onHoverPoints={(pts) => setHighlightedPoints(new Set(pts))}
           onLeavePoints={() => setHighlightedPoints(undefined)}
           onOpenGuidelineRule={(ruleCode) => handleOpenGuideline(ruleCode)}
+          onSetPointSource={handleSetPointSource}
+          selectedPointId={selectedPointId}
+          onSelectPoint={setSelectedPointId}
         />
       </div>
 

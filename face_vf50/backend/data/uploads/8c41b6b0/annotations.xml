@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<annotations>
+  <version>1.1</version>
+  <image id="0" name="media_1791431084108.png" width="1280" height="720">
+    <skeleton label="longmaytrai">
+      <points label="0" label_id="117" points="480.0,260.0" outside="0" occluded="0" />
+      <points label="1" label_id="118" points="495.0,260.0" outside="0" occluded="0" />
+      <points label="2" label_id="119" points="510.0,260.0" outside="0" occluded="0" />
+      <points label="3" label_id="120" points="525.0,260.0" outside="0" occluded="0" />
+      <points label="4" label_id="121" points="540.0,260.0" outside="0" occluded="0" />
+    </skeleton>
+    <skeleton label="longmayphai">
+      <points label="0" label_id="123" points="560.0,260.0" outside="0" occluded="0" />
+      <points label="1" label_id="124" points="575.0,260.0" outside="0" occluded="0" />
+      <points label="2" label_id="125" points="590.0,260.0" outside="0" occluded="0" />
+      <points label="3" label_id="126" points="605.0,260.0" outside="0" occluded="0" />
+      <points label="4" label_id="127" points="620.0,260.0" outside="0" occluded="0" />
+    </skeleton>
+  </image>
+</annotations>

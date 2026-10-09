@@ -103,6 +103,58 @@ class TestCVATParser(unittest.TestCase):
         self.assertIn(5, f0_kpts)
         self.assertEqual(f0_kpts[5]["x"], 560.0)
 
+    def test_parse_coco_keypoints_7_categories(self):
+        sample_coco = {
+            "images": [{"id": 1, "file_name": "test_img.png", "width": 1280, "height": 720}],
+            "categories": [
+                {"id": 1, "name": "longmaytrai", "keypoints": ["0", "1", "2", "3", "4"]},
+                {"id": 7, "name": "longmayphai", "keypoints": ["5", "6", "7", "8", "9"]},
+            ],
+            "annotations": [
+                {
+                    "image_id": 1,
+                    "category_id": 1,
+                    "keypoints": [10.0, 20.0, 2, 15.0, 25.0, 2, 20.0, 30.0, 2, 25.0, 35.0, 2, 30.0, 40.0, 2],
+                },
+                {
+                    "image_id": "1",  # String ID test
+                    "category_id": "7",  # String category test
+                    "keypoints": [50.0, 60.0, 2, 55.0, 65.0, 2, 60.0, 70.0, 2, 65.0, 75.0, 2, 70.0, 80.0, 2],
+                },
+            ],
+        }
+        import json
+        payload = json.dumps(sample_coco).encode("utf-8")
+        parsed = parse_annotation_payload(payload)
+        self.assertEqual(len(parsed), 1)
+        kpts = parsed[0]["keypoints"]
+        # Must have longmaytrai (0..4) and longmayphai (5..9)
+        self.assertEqual(len(kpts), 10)
+        self.assertIn(0, kpts)
+        self.assertIn(5, kpts)
+        self.assertIn(9, kpts)
+        self.assertEqual(kpts[5]["x"], 50.0)
+
+    def test_parse_coco_keypoints_single_category(self):
+        # 50 points flat under 1 single category 'face'
+        flat_kpts = []
+        for i in range(50):
+            flat_kpts.extend([float(i * 10), float(i * 10 + 5), 2])
+        sample_coco = {
+            "images": [{"id": "img_01", "file_name": "face.jpg", "width": 640, "height": 480}],
+            "categories": [{"id": 100, "name": "face", "keypoints": [f"point_{i}" for i in range(50)]}],
+            "annotations": [{"image_id": "img_01", "category_id": 100, "keypoints": flat_kpts}],
+        }
+        import json
+        payload = json.dumps(sample_coco).encode("utf-8")
+        parsed = parse_annotation_payload(payload)
+        self.assertEqual(len(parsed), 1)
+        kpts = parsed[0]["keypoints"]
+        self.assertEqual(len(kpts), 50)
+        for i in range(50):
+            self.assertIn(i, kpts)
+            self.assertEqual(kpts[i]["x"], float(i * 10))
+
 
 if __name__ == "__main__":
     unittest.main()
