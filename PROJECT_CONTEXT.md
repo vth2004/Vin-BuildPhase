@@ -5,34 +5,33 @@ Hệ thống **Landmark Quality Assurance (QA)** tự động thẩm định ch�
 - Mục tiêu chính: Phát hiện nhãn người gán bị lệch tọa độ, gán nhầm đối tượng, hoặc hoán đổi đối xứng trái/phải (`swap_error`).
 - Hỗ trợ các chuẩn nhãn:
   - `vf_humanpose17_v1`: Chuẩn VinFast HumanPose 17 khớp (COCO-17 đối xứng với quy ước chẵn: right, lẻ: left).
-  - `vf_face_landmark50_v1`: Chuẩn khuôn mặt 50 điểm (mock).
+  - `vf_face_landmark50_v1`: Chuẩn khuôn mặt 50 điểm, kiểm định bằng MediaPipe Face Landmarker và 14 luật guideline.
 
 ---
 
 ## 2. Kiến trúc Hệ thống (System Architecture)
 ```text
 backend/app/
-├── main.py                     # Entry point FastAPI, CORS & Routers
+├── main.py                     # Composition root FastAPI, CORS, routers và run handlers
 ├── core/
 │   ├── config.py               # Biến môi trường & cấu hình hệ thống
 │   ├── database.py             # SQLite connection & lightweight migration
 │   └── security.py             # Xác thực project_guard qua Recovery Key
-├── adapters/                   # Lớp cắm mô hình AI (Model-Agnostic Interface)
-│   ├── base.py                 # BasePosePredictor interface
-│   ├── yolo_pose.py            # YoloPoseAdapter (YOLO26s-pose)
-│   ├── rtm_pose.py             # RtmPosePredictor (RTMPose-m qua rtmlib/ONNX)
-│   └── yolo8m_pose.py          # Yolo8mPosePredictor (tùy chọn K=3)
-├── services/
-│   ├── ensemble.py             # Toán học Ensemble: p*, delta, e, R, score, IoU consensus
-│   ├── scoring.py              # Dịch vụ chấm điểm nghi ngờ đa mô hình
-│   ├── dataset_service.py      # Giải nén an toàn & validate schema
-│   └── mock_service.py         # Mock pipeline cho Face-50
+├── features/
+│   ├── human_pose/             # Adapter, ensemble, scoring và parser HumanPose
+│   └── face_landmark_vf50/     # MediaPipe, parser, rules, scoring, review và export Face
+├── shared/
+│   ├── datasets/               # Safe ZIP extraction
+│   ├── database/               # Database boundary dùng chung
+│   └── jobs/                   # Run handler registry/dispatcher
 └── routers/
     ├── projects.py             # API dự án
     ├── datasets.py             # API dataset & ảnh
     ├── runs.py                 # API khởi chạy & tiến độ Run
-    └── warnings.py             # API danh sách cảnh báo, review & xuất JSON
+    └── warnings.py             # API cảnh báo và review HumanPose
 ```
+
+Các module cũ trong `app/adapters` và `app/services` là compatibility re-export tạm thời. HumanPose và Face không được import logic nghiệp vụ của nhau.
 
 ---
 
@@ -92,6 +91,13 @@ Bảng `warnings`:
 
 Bảng `runs`:
 - Bổ sung cột `mode TEXT DEFAULT 'K2'`.
+- Bổ sung `error_message` để Face run báo lỗi model/parser minh bạch.
+
+Bảng Face riêng:
+- `face_frame_results`: kết quả model, rule violations, IOD/NME và trạng thái review.
+- `face_point_reviews`: lựa chọn Human/Model theo từng điểm; không sửa annotation nguồn.
+
+Bảng `images` bổ sung `frame_index`; `schema_migrations` quản lý migration idempotent và tạo backup trước lần nâng schema đầu tiên.
 
 Cơ chế migration qua `PRAGMA table_info` tự động kiểm tra và thêm cột khi thiếu mà không làm gián đoạn hay mất dữ liệu SQLite hiện có.
 

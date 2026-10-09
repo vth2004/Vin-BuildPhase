@@ -1,5 +1,15 @@
 # Kế hoạch tích hợp Face Landmark VF50
 
+## Trạng thái triển khai
+
+- [x] Tách namespace nghiệp vụ HumanPose và Face, có compatibility re-export cho đường dẫn cũ.
+- [x] Tích hợp parser, MediaPipe mapper, 14 rules, scoring, review và export VF50.
+- [x] Dùng chung Project, Recovery key, SQLite, backend `8000` và frontend `5173`.
+- [x] Thêm migration/backup, bảng kết quả-review Face và giữ annotation nguồn bất biến.
+- [x] Thêm route `/face`, lịch sử run, canvas overlay, point review và batch confirmation.
+- [x] Chuyển/cập nhật tài liệu, script model có checksum và test tự động.
+- [x] Backend tests, frontend build và kiểm tra trực quan desktop/responsive đã chạy thành công.
+
 ## 1. Mục tiêu và nguyên tắc
 
 - Tích hợp có chọn lọc chức năng Face Landmark VF50 từ `origin/dev/dung` vào kiến trúc hiện tại.

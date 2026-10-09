@@ -14,7 +14,10 @@ from fastapi.responses import FileResponse
 from app.core.config import DATA_DIR, IMAGE_EXTENSIONS, MAX_UPLOAD_BYTES
 from app.core.database import db
 from app.core.security import project_guard
-from app.services.dataset_service import load_schema, safe_extract_images, validate_annotations
+from app.features.face_landmark_vf50 import SCHEMA_ID as FACE_SCHEMA_ID
+from app.features.face_landmark_vf50.services.ingestion import parse_face_annotations
+from app.features.human_pose.services.dataset import load_schema, validate_annotations
+from app.shared.datasets import safe_extract_images
 
 router = APIRouter(prefix="/api/projects/{project_id}/datasets", tags=["datasets"])
 
@@ -24,7 +27,7 @@ def upload_dataset(
     project_id: str,
     file: Annotated[UploadFile, File(description="ZIP containing image files")],
     schema_id: Annotated[str, Form()],
-    annotation_file: Annotated[UploadFile | None, File(description="landmark-qa/v1 or COCO annotation JSON")] = None,
+    annotation_file: Annotated[UploadFile | None, File(description="CVAT XML, COCO JSON, landmark-qa/v1 or cleaned JSON")] = None,
     _: sqlite3.Row = Depends(project_guard),
 ) -> dict:
     if not file.filename or not file.filename.lower().endswith(".zip"):
@@ -46,20 +49,35 @@ def upload_dataset(
         elif embedded_annotation:
             raw_annotation = embedded_annotation
 
-        if not raw_annotation:
+        if not raw_annotation and schema_id != FACE_SCHEMA_ID:
             raise HTTPException(400, "No annotation JSON provided or found inside ZIP")
-        if len(raw_annotation) > MAX_UPLOAD_BYTES:
+        if raw_annotation and len(raw_annotation) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "Annotation JSON exceeds 500 MB limit")
 
-        try:
-            annotation_payload = json.loads(raw_annotation)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise HTTPException(400, "Annotation file is not valid JSON") from error
+        if schema_id == FACE_SCHEMA_ID:
+            validated = parse_face_annotations(raw_annotation, set(images)) if raw_annotation else []
+            records_by_name = {record["file_name"]: record for record in validated}
+            validated = [
+                records_by_name.get(name, {
+                    "file_name": name,
+                    "width": None,
+                    "height": None,
+                    "annotations": [],
+                })
+                for name in images
+            ]
+        else:
+            try:
+                annotation_payload = json.loads(raw_annotation)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise HTTPException(400, "Annotation file is not valid JSON") from error
+            validated = validate_annotations(annotation_payload, schema, set(images))
 
-        validated = validate_annotations(annotation_payload, schema, set(images))
-
-        annotation_path = location.parent / "source_annotation.json"
-        annotation_path.write_bytes(raw_annotation)
+        annotation_path = None
+        if raw_annotation:
+            annotation_suffix = ".xml" if raw_annotation.lstrip().startswith(b"<") else ".json"
+            annotation_path = location.parent / f"source_annotation{annotation_suffix}"
+            annotation_path.write_bytes(raw_annotation)
 
         with db() as conn:
             conn.execute(
@@ -73,15 +91,15 @@ def upload_dataset(
                     len(images),
                     str(location),
                     schema_id,
-                    str(annotation_path),
+                    str(annotation_path) if annotation_path else None,
                     int(time.time()),
                 ),
             )
-            for image in validated:
+            for frame_index, image in enumerate(validated):
                 image_id = str(uuid.uuid4())
                 conn.execute(
-                    "INSERT INTO images VALUES (?, ?, ?, ?, ?)",
-                    (image_id, dataset_id, image["file_name"], image["width"], image["height"]),
+                    "INSERT INTO images (id, dataset_id, file_name, width, height, frame_index) VALUES (?, ?, ?, ?, ?, ?)",
+                    (image_id, dataset_id, image["file_name"], image["width"], image["height"], frame_index),
                 )
                 for annotation in image["annotations"]:
                     conn.execute(

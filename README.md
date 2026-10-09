@@ -1,89 +1,101 @@
 # Landmark QA Web Application
 
-Hệ thống thẩm định chất lượng nhãn Landmark/Keypoint (Landmark Quality Assurance) — Tự động phát hiện nhãn gán lệch, hoán đổi trái/phải và các điểm nghi ngờ thông qua so sánh giữa **Nhãn người gán** và **Dự đoán từ Model AI**.
+Hệ thống kiểm định chất lượng nhãn Landmark/Keypoint bằng cách so sánh nhãn người gán với dự đoán AI.
 
-Hỗ trợ chuẩn nhãn VinFast: `vf_humanpose17_v1` (tích hợp model **YOLO26s-pose**) và `vf_face_landmark50_v1`.
+Hai feature nghiệp vụ được tách độc lập:
 
----
+- `vf_humanpose17_v1`: HumanPose 17 điểm, ensemble YOLO/RTMPose.
+- `vf_face_landmark50_v1`: Face Landmark VF50, MediaPipe Face Landmarker và 14 luật guideline.
 
-## Cấu trúc dự án Backend (Modular Layered Architecture)
-
-Backend được tổ chức theo kiến trúc chuẩn của FastAPI:
+## Kiến trúc
 
 ```text
 backend/app/
-├── main.py                     # Entry point: Khởi tạo FastAPI, CORS & gắn Routers
-│
-├── core/                       # Cấu hình hệ thống, Bảo mật & Database
-│   ├── config.py               # Hằng số, biến môi trường (DATA_DIR, SCHEMAS_DIR, ...)
-│   ├── database.py             # Kết nối SQLite & migration bảng
-│   └── security.py             # Xác thực project_guard, băm SHA-256 recovery key
-│
-├── schemas/                    # Pydantic Schemas (Data Transfer Objects)
-│   ├── project.py              # CreateProject DTO
-│   └── warning.py              # ReviewWarning DTO
-│
-├── services/                   # Xử lý nghiệp vụ (Business Logic)
-│   ├── dataset_service.py      # Giải nén an toàn (anti-Zip Slip), validate schema
-│   ├── ensemble.py             # Thuật toán Ensemble: p*, delta, e, R, score, IoU consensus
-│   ├── scoring.py              # Dịch vụ chấm điểm nghi ngờ đa mô hình (K=1, K=2, K=3)
-│   └── mock_service.py         # Trình điều phối chạy nền & fallback kết quả giả lập
-│
-├── routers/                    # Tầng API Endpoints (APIRouter)
-│   ├── projects.py             # /api/projects, /api/projects/{id}
-│   ├── datasets.py             # /api/projects/{id}/datasets, get_image
-│   ├── runs.py                 # /api/projects/{id}/runs, get_run
-│   └── warnings.py             # /api/projects/{id}/runs/{id}/warnings, review, export
-│
-└── adapters/                   # Lớp cắm Model AI tự do (Model-Agnostic)
-    ├── base.py                 # BasePosePredictor interface
-    ├── yolo_pose.py            # YoloPoseAdapter (YOLO26s-pose)
-    ├── rtm_pose.py             # RtmPosePredictor (RTMPose-m qua rtmlib/ONNX)
-    └── yolo8m_pose.py          # Yolo8mPosePredictor (YOLOv8m-pose cho K=3)
+|-- features/
+|   |-- human_pose/                 # Adapter, ensemble, scoring và parser HumanPose
+|   `-- face_landmark_vf50/        # Adapter, parser, 14 rules, scoring, review và export VF50
+|-- shared/
+|   |-- database/                   # Biên truy cập SQLite dùng chung
+|   |-- datasets/                   # Safe ZIP extraction dùng chung
+|   `-- jobs/                       # Registry và dispatch background run
+|-- core/                           # Cấu hình, database migration, recovery-key security
+|-- routers/                        # Project, dataset, run và HumanPose warning API
+`-- main.py                         # Composition root đăng ký hai feature
+
+frontend/src/
+|-- app/                            # Router và app shell
+|-- features/
+|   |-- human-pose/
+|   `-- face-landmark-vf50/
+`-- shared/
 ```
 
----
+Hai feature không được import logic nghiệp vụ của nhau. Các file trong `backend/app/adapters` và `backend/app/services` chỉ là compatibility re-export tạm thời cho consumer cũ.
 
-## Chạy Local
+## Chạy local
 
-### 1. Backend (Python 3.10+)
+### Backend — cổng 8000
+
+Yêu cầu Python 3.10+.
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python scripts/download_face_landmarker.py
 uvicorn app.main:app --reload --port 8000
 ```
-API Documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-### 2. Frontend (Node 20+)
+Có thể đặt model ở vị trí khác bằng biến môi trường `FACE_LANDMARKER_MODEL_PATH`. Script download kiểm tra SHA-256 của model đã ghim phiên bản; file `.task` không được commit.
+
+API docs: http://localhost:8000/docs
+
+### Frontend — cổng 5173
 
 ```powershell
 cd frontend
 npm install
-npm run dev
+npm run dev -- --port 5173
 ```
-Giao diện ứng dụng: [http://localhost:5173](http://localhost:5173)
 
----
+- HumanPose: http://localhost:5173/
+- Face Landmark VF50: http://localhost:5173/face
 
-## Luồng hoạt động chính
+## Luồng sử dụng
 
-1. **Tạo Project:** Sinh mã `Recovery Key` để xác thực cho toàn bộ thao tác sau này.
-2. **Upload Dataset:** Nhận file `.zip` chứa ảnh và file `.json` annotation (COCO Keypoints từ CVAT hoặc `landmark-qa/v1`).
-3. **Quét lỗi (Run QA):** Background task tự động đưa ảnh vào model AI (**`yolo26s-pose.pt`**) để dự đoán lại, tính khoảng cách lệch chuẩn hóa và bắt lỗi hoán đổi trái/phải (`swap_error`).
-4. **Review trực quan:** Khung Canvas hiển thị overlay so sánh giữa điểm người gán và điểm model gợi ý kèm các phím tắt nhanh:
-   - <kbd>K</kbd>: **Giữ nhãn** (xác nhận người gán đúng, model sai).
-   - <kbd>M</kbd>: **Lấy Model** (thay thế điểm sai bằng gợi ý của model).
-   - <kbd>S</kbd>: **Bỏ qua** (trường hợp khó/chưa quyết định).
-5. **Export dữ liệu:** Xuất file annotation JSON sạch đã được tự động sửa các điểm sai theo quyết định của người review.
+1. Tạo hoặc mở lại Project bằng Recovery key.
+2. Upload ZIP ảnh và annotation tương ứng.
+3. Chọn dataset và tạo run.
+4. Xem overlay Human/Model, rule violations và các ca khó.
+5. Chọn Human hoặc Model theo từng điểm; batch fix luôn yêu cầu preview và xác nhận.
+6. Export JSON sạch, CVAT XML, CSV hoặc checklist.
 
----
+Face chấp nhận CVAT XML, COCO JSON, `landmark-qa/v1`, cleaned JSON hoặc ZIP chỉ có ảnh. HumanPose tiếp tục dùng định dạng hiện có.
+
+## Database và bảo toàn nhãn
+
+- Dùng một SQLite tại `backend/data/landmark_qa.sqlite3`.
+- Các bảng lõi Project–Dataset–Image–Annotation–Run dùng chung.
+- `face_frame_results` và `face_point_reviews` chỉ thuộc Face.
+- Annotation nguồn không bị chỉnh sửa; export được dựng từ nhãn gốc và quyết định review.
+- Migration tạo backup có timestamp trước lần nâng schema đầu tiên và không xóa dữ liệu cũ.
 
 ## Bảo mật
 
-- Ảnh/ZIP được lưu trong `backend/data/projects/<project_id>/`, không public trực tiếp qua static hosting.
-- Mọi API thuộc project yêu cầu `Authorization: Bearer <recovery-key>`.
-- Cơ chế giải nén an toàn ngăn chặn tấn công Path Traversal / Zip Slip.
-- Bản production cần cấu hình thêm HTTPS/TLS, Object Storage (S3/MinIO) có mã hóa và chính sách tự hủy dữ liệu (TTL).
+- Mọi API thuộc Project yêu cầu `Authorization: Bearer <recovery-key>`.
+- URL ảnh có thể dùng `?token=<recovery-key>` để trình duyệt tải trực tiếp.
+- ZIP được kiểm tra path traversal, symlink, đường dẫn trùng, số file và tổng kích thước giải nén.
+- Thư mục dữ liệu, database, model và artifact build đều nằm ngoài Git.
+
+## Kiểm thử
+
+```powershell
+cd backend
+python -m unittest discover -s tests -v
+
+cd ..\frontend
+npm run build
+```
+
+Tài liệu nghiệp vụ Face nằm tại `backend/tailieu/face_vf50/`.

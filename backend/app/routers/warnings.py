@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.core.database import db
 from app.core.security import project_guard
 from app.schemas.warning import ReviewWarning
-from app.services.dataset_service import load_schema
+from app.features.human_pose.services.dataset import load_schema
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["warnings"])
 

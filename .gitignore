@@ -39,6 +39,7 @@ backend/data/
 *.pth
 *.onnx
 *.bin
+*.task
 *.ckpt
 *.zip
 *.tar.gz

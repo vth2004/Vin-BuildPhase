@@ -8,6 +8,31 @@
 
 body { margin: 0; padding: 0; }
 
+.app-nav {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 24px;
+  background: rgba(248, 250, 252, 0.96);
+  border-bottom: 1px solid #e2e8f0;
+  backdrop-filter: blur(8px);
+}
+
+.app-nav a {
+  color: #475569;
+  text-decoration: none;
+  font-size: 0.88rem;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 7px;
+}
+
+.app-nav a:hover { background: #e2e8f0; }
+.app-nav a.active { color: white; background: #2563eb; }
+
 main {
   max-width: 1300px;
   margin: 0 auto;

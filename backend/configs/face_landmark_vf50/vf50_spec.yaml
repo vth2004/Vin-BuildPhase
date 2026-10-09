@@ -1,0 +1,79 @@
+schema_id: vf_face_landmark50_v1
+name: VinFast Face Landmark VF-50
+version: "1.3"
+image_size:
+  width: 1280
+  height: 720
+
+skeletons:
+  - name: longmaytrai
+    point_range: [0, 4]
+    point_count: 5
+    closed: false
+    proportions: [0.00, 0.15, 0.41, 0.73, 1.00]
+    description: "Bờ trên lông mày trái (nhìn trên ảnh), chạy từ đuôi ngoài vào đầu trong"
+
+  - name: longmayphai
+    point_range: [5, 9]
+    point_count: 5
+    closed: false
+    proportions: [0.00, 0.26, 0.58, 0.85, 1.00]
+    description: "Bờ trên lông mày phải (nhìn trên ảnh), chạy từ đầu trong ra đuôi ngoài"
+
+  - name: songmui
+    point_range: [10, 13]
+    point_count: 4
+    closed: false
+    proportions: [0.00, 0.34, 0.67, 1.00]
+    description: "Sống mũi: 10 đỉnh sống mũi, 11-12 thân sống mũi, 13 chân sống mũi (không phải chóp mũi)"
+
+  - name: mattrai
+    point_range: [14, 21]
+    point_count: 8
+    closed: true
+    proportions: [0.00, 0.21, 0.48, 0.76, 1.00, 0.76, 0.50, 0.24]
+    opposite_eyelid_pairs: [[15, 21], [16, 20], [17, 19]]
+    description: "Mắt trái (nhìn trên ảnh): 14 khoé ngoài, 15-17 mí trên, 18 khoé trong, 19-21 mí dưới"
+
+  - name: matphai
+    point_range: [22, 29]
+    point_count: 8
+    closed: true
+    proportions: [0.00, 0.23, 0.51, 0.79, 1.00, 0.78, 0.52, 0.25]
+    opposite_eyelid_pairs: [[23, 29], [24, 28], [25, 27]]
+    description: "Mắt phải (nhìn trên ảnh): 22 khoé trong, 23-25 mí trên, 26 khoé ngoài, 27-29 mí dưới"
+
+  - name: moingoai
+    point_range: [30, 41]
+    point_count: 12
+    closed: true
+    proportions: [0.00, 0.18, 0.41, 0.53, 0.65, 0.85, 1.00, 0.87, 0.72, 0.55, 0.35, 0.18]
+    description: "Viền môi ngoài: 30 khoé trái, 31-35 bờ môi trên, 36 khoé phải, 37-41 bờ môi dưới"
+
+  - name: moitrong
+    point_range: [42, 49]
+    point_count: 8
+    closed: true
+    proportions: [0.00, 0.22, 0.53, 0.82, 1.00, 0.81, 0.53, 0.23]
+    description: "Viền môi trong: 42 khoé trong trái, 43-45 mép trong trên, 46 khoé trong phải, 47-49 mép trong dưới"
+
+# 12 Điểm neo theo Mục 5.5 & Mục 8 GL
+anchor_points: [0, 4, 5, 9, 10, 13, 14, 18, 22, 26, 30, 36]
+
+# Ngưỡng sai số theo Mục 8 GL (tỉ lệ IOD)
+tolerances:
+  anchor_point_iod_ratio: 0.03        # 3% IOD (~3 px)
+  contour_point_iod_ratio: 0.05       # 5% IOD (~5 px)
+  nme_max_threshold: 0.035            # NME toàn ảnh <= 0.035 (~3.4 px)
+  temporal_jump_max_px: 15.0          # Nhảy giữa 2 frame liên tiếp <= 15 px (Mục 6.9)
+  bridge_segment_max_ratio: 1.45      # Tỉ lệ đoạn sống mũi dài nhất / ngắn nhất <= 1.45
+
+# Ngưỡng ẩn cả skeleton theo Mục 4.2 GL
+skeleton_visibility_thresholds:
+  mattrai: 4      # Ít hơn 4/8 điểm -> Outside cả skeleton
+  matphai: 4      # Ít hơn 4/8 điểm -> Outside cả skeleton
+  longmaytrai: 3  # Ít hơn 3/5 điểm -> Outside cả skeleton
+  longmayphai: 3  # Ít hơn 3/5 điểm -> Outside cả skeleton
+  moingoai: 6     # Ít hơn 6/12 điểm -> Outside cả skeleton
+  moitrong: 4     # Ít hơn 4/8 điểm -> Outside cả skeleton
+  songmui: 1      # Chỉ Outside khi cả 4 điểm khuất
