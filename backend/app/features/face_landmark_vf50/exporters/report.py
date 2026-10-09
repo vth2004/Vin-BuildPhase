@@ -33,15 +33,21 @@ def generate_markdown_checklist(
         fn = f["file_name"]
         violations = f.get("violations", [])
         quality = f.get("quality", {})
-        nme = quality.get("nme", 0.0)
-        passed_nme = quality.get("passed_nme", True)
-        nme_badge = "ĐẠT (<= 0.035)" if passed_nme else "**VƯỢT NGƯỠNG (> 0.035)**"
+        nme = quality.get("nme")
+        passed_nme = quality.get("passed_nme")
+        if passed_nme is None:
+            nme_badge = "N/A (Chưa đánh giá)"
+        elif passed_nme:
+            nme_badge = "ĐẠT (<= 0.035)"
+        else:
+            nme_badge = "**VƯỢT NGƯỠNG (> 0.035)**"
+        nme_str = f"{nme:.4f}" if nme is not None else "N/A"
 
-        if not violations and passed_nme:
+        if not violations and (passed_nme is True):
             continue
 
         md.append(f"### #{idx}. Frame: `{fn}`\n")
-        md.append(f"- **Chỉ số NME toàn ảnh:** {nme} ({nme_badge}) | **IOD:** {quality.get('iod', 96)} px\n")
+        md.append(f"- **Chỉ số NME toàn ảnh:** {nme_str} ({nme_badge}) | **IOD:** {quality.get('iod', 96)} px\n")
 
         if violations:
             md.append("- **Các vi phạm luật Guideline:**\n")
@@ -73,7 +79,8 @@ def generate_csv_report(frames_report: list[dict[str, Any]]) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "Tên Frame", "Số Lỗi", "Số Cảnh báo", "NME", "Đạt chuẩn NME",
+        "Tên Frame", "Số Lỗi", "Số Cảnh báo", "Tổng vi phạm", "NME", "Đạt chuẩn NME",
+        "e_max", "e_p90", "Số điểm vượt ngưỡng", "Cờ Outlier",
         "Danh sách mã vi phạm", "Điểm lệch nặng nhất", "Trạng thái Review",
     ])
 
@@ -82,9 +89,24 @@ def generate_csv_report(frames_report: list[dict[str, Any]]) -> str:
         violations = f.get("violations", [])
         err_c = sum(1 for v in violations if v["level"] == "ERROR")
         warn_c = sum(1 for v in violations if v["level"] == "WARNING")
+        violation_c = len(violations)
         q = f.get("quality", {})
-        nme = q.get("nme", 0.0)
-        passed = "ĐẠT" if q.get("passed_nme", True) else "VƯỢT NGƯỠNG"
+        nme = q.get("nme")
+        nme_str = f"{nme:.4f}" if nme is not None else "N/A"
+        if q.get("passed_nme") is None:
+            passed = "N/A"
+        elif q.get("passed_nme"):
+            passed = "ĐẠT"
+        else:
+            passed = "VƯỢT NGƯỠNG"
+
+        e_max = q.get("e_max")
+        e_max_str = f"{e_max:.4f}" if e_max is not None else "N/A"
+        e_p90 = q.get("e_p90")
+        e_p90_str = f"{e_p90:.4f}" if e_p90 is not None else "N/A"
+        exceed_cnt = q.get("exceed_count", 0)
+        has_outlier = "CÓ" if q.get("has_outlier_point") else "KHÔNG"
+
         v_codes = "; ".join(v["code"] for v in violations)
 
         exceeded_pts = [
@@ -93,7 +115,9 @@ def generate_csv_report(frames_report: list[dict[str, Any]]) -> str:
         exceeded_str = ", ".join(exceeded_pts[:5])
 
         writer.writerow([
-            fn, err_c, warn_c, nme, passed, v_codes, exceeded_str, "Chưa sửa",
+            fn, err_c, warn_c, violation_c, nme_str, passed,
+            e_max_str, e_p90_str, exceed_cnt, has_outlier,
+            v_codes, exceeded_str, "Chưa sửa",
         ])
 
     return output.getvalue()

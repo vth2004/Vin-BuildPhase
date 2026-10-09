@@ -36,36 +36,156 @@ def compute_iod(keypoints_by_id: dict[int, dict[str, Any]]) -> float:
         if i in keypoints_by_id and keypoints_by_id[i].get("x") is not None and keypoints_by_id[i].get("y") is not None
     ]
 
-    if len(left_eye_pts) >= 4 and len(right_eye_pts) >= 4:
+    from ..spec import get_geometry_spec
+    geom = get_geometry_spec().get("iod", {})
+    min_eye_pts = geom.get("min_eye_points", 4)
+    min_center_dist = geom.get("min_eye_center_dist", 10.0)
+
+    if len(left_eye_pts) >= min_eye_pts and len(right_eye_pts) >= min_eye_pts:
         c_left = compute_centroid(left_eye_pts)
         c_right = compute_centroid(right_eye_pts)
         iod = euclidean_dist(c_left, c_right)
-        if iod > 10.0:
+        if iod > min_center_dist:
             return iod
 
     # Fallback nếu một trong 2 mắt bị che: dùng khoảng cách giữa 2 khóe ngoài 14 và 26
     p14 = keypoints_by_id.get(14)
     p26 = keypoints_by_id.get(26)
+    min_outer_dist = geom.get("outer_corners_min_dist", 5.0)
+    outer_ratio = geom.get("outer_corners_ratio", 0.65)
     if p14 and p26 and p14.get("x") is not None and p26.get("x") is not None:
         outer_dist = euclidean_dist((float(p14["x"]), float(p14["y"])), (float(p26["x"]), float(p26["y"])))
-        if outer_dist > 5.0:
-            return outer_dist * 0.65
+        if outer_dist > min_outer_dist:
+            return outer_dist * outer_ratio
 
     # Fallback thích ứng dựa trên bounding box thực tế của toàn bộ khuôn mặt:
-    # Tránh sai số nghiêm trọng khi mặt ở xa hoặc ảnh có độ phân giải nhỏ
     all_valid_pts = [
         (float(kp["x"]), float(kp["y"]))
         for kp in keypoints_by_id.values()
         if kp.get("state") != "outside" and kp.get("x") is not None and kp.get("y") is not None
     ]
-    if len(all_valid_pts) >= 8:
+    min_face_pts = geom.get("face_width_min_points", 8)
+    min_face_w = geom.get("face_width_min_px", 10.0)
+    min_result_px = geom.get("face_width_min_result_px", 12.0)
+    width_ratio = geom.get("face_width_ratio", 0.42)
+    if len(all_valid_pts) >= min_face_pts:
         min_x = min(p[0] for p in all_valid_pts)
         max_x = max(p[0] for p in all_valid_pts)
         face_width = max_x - min_x
-        if face_width > 10.0:
-            return max(12.0, face_width * 0.42)
+        if face_width > min_face_w:
+            return max(min_result_px, face_width * width_ratio)
 
-    return 96.0  # Mặc định theo phân vị trung vị của GL
+    return float(geom.get("default_iod_px", 96.0))
+
+
+def compute_iod_with_source(
+    model_kpts: dict[int, dict[str, Any]] | None,
+    human_kpts: dict[int, dict[str, Any]] | None = None,
+) -> tuple[float, str]:
+    """
+    Tính IOD MỘT LẦN khi chạy run theo chuỗi dự phòng:
+    1. 'model': từ model_kpts (tâm mắt hoặc khóe ngoài hoặc bbox)
+    2. 'human': từ human_kpts (tâm mắt hoặc khóe ngoài hoặc bbox)
+    3. 'bbox': từ bounding box của model hoặc human
+    4. 'default': 96.0 px (hoặc cấu hình)
+    Trả về: (iod_value, source_name)
+    """
+    from ..spec import get_geometry_spec
+    geom = get_geometry_spec().get("iod", {})
+    min_eye_pts = geom.get("min_eye_points", 4)
+    min_center_dist = geom.get("min_eye_center_dist", 10.0)
+    min_outer_dist = geom.get("outer_corners_min_dist", 5.0)
+    outer_ratio = geom.get("outer_corners_ratio", 0.65)
+    min_face_pts = geom.get("face_width_min_points", 8)
+    min_face_w = geom.get("face_width_min_px", 10.0)
+    min_result_px = geom.get("face_width_min_result_px", 12.0)
+    width_ratio = geom.get("face_width_ratio", 0.42)
+    default_iod = float(geom.get("default_iod_px", 96.0))
+
+    def _eye_pts(kpts: dict[int, dict[str, Any]] | None, start: int, end: int) -> list[tuple[float, float]]:
+        if not kpts:
+            return []
+        return [
+            (float(kpts[i]["x"]), float(kpts[i]["y"]))
+            for i in range(start, end)
+            if i in kpts and kpts[i].get("x") is not None and kpts[i].get("y") is not None
+        ]
+
+    # 1. Tâm mắt từ Model
+    if model_kpts:
+        l_m = _eye_pts(model_kpts, 14, 22)
+        r_m = _eye_pts(model_kpts, 22, 30)
+        if len(l_m) >= min_eye_pts and len(r_m) >= min_eye_pts:
+            iod_m = euclidean_dist(compute_centroid(l_m), compute_centroid(r_m))
+            if iod_m > min_center_dist:
+                return (iod_m, "model")
+
+    # 2. Tâm mắt từ Human
+    if human_kpts:
+        l_h = _eye_pts(human_kpts, 14, 22)
+        r_h = _eye_pts(human_kpts, 22, 30)
+        if len(l_h) >= min_eye_pts and len(r_h) >= min_eye_pts:
+            iod_h = euclidean_dist(compute_centroid(l_h), compute_centroid(r_h))
+            if iod_h > min_center_dist:
+                return (iod_h, "human")
+
+    # 3. Khóe ngoài từ Model rồi Human
+    for kpts, src in ((model_kpts, "model"), (human_kpts, "human")):
+        if kpts:
+            p14 = kpts.get(14)
+            p26 = kpts.get(26)
+            if p14 and p26 and p14.get("x") is not None and p26.get("x") is not None:
+                d = euclidean_dist((float(p14["x"]), float(p14["y"])), (float(p26["x"]), float(p26["y"])))
+                if d > min_outer_dist:
+                    return (d * outer_ratio, src)
+
+    # 4. Bounding box từ Model rồi Human
+    for kpts in (model_kpts, human_kpts):
+        if kpts:
+            valid = [
+                (float(kp["x"]), float(kp["y"]))
+                for kp in kpts.values()
+                if kp.get("state") != "outside" and kp.get("x") is not None and kp.get("y") is not None
+            ]
+            if len(valid) >= min_face_pts:
+                fw = max(p[0] for p in valid) - min(p[0] for p in valid)
+                if fw > min_face_w:
+                    return (max(min_result_px, fw * width_ratio), "bbox")
+
+    # 5. Default
+    return (default_iod, "default")
+
+
+def point_to_segment_distance(
+    point: tuple[float, float],
+    seg_start: tuple[float, float],
+    seg_end: tuple[float, float],
+) -> float:
+    """Khoảng cách Euclid ngắn nhất từ điểm point tới đoạn thẳng seg_start-seg_end."""
+    px, py = point
+    x1, y1 = seg_start
+    x2, y2 = seg_end
+    dx, dy = x2 - x1, y2 - y1
+    if dx == 0 and dy == 0:
+        return euclidean_dist(point, seg_start)
+    t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    proj = (x1 + t * dx, y1 + t * dy)
+    return euclidean_dist(point, proj)
+
+
+def min_distance_to_polygon(
+    point: tuple[float, float],
+    polygon: list[tuple[float, float]],
+) -> float:
+    """Khoảng cách ngắn nhất từ điểm point tới đường bao của đa giác polygon."""
+    n = len(polygon)
+    if n < 2:
+        return 0.0
+    return min(
+        point_to_segment_distance(point, polygon[i], polygon[(i + 1) % n])
+        for i in range(n)
+    )
 
 
 def compute_face_bbox(keypoints_by_id: dict[int, dict[str, Any]]) -> tuple[float, float, float, float]:

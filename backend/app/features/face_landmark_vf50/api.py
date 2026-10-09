@@ -85,6 +85,7 @@ def _recalculate_result(conn: sqlite3.Connection, result_id: str) -> None:
     ).fetchone()
     if not row:
         return
+    stored_iod = float(row["iod"])
     human = _json_mapping(row["human_keypoints_json"])
     model = _json_mapping(row["model_keypoints_json"])
     reviewed = _reviewed_points(human, model, _point_sources(conn, result_id))
@@ -108,19 +109,29 @@ def _recalculate_result(conn: sqlite3.Connection, result_id: str) -> None:
             model_keypoints_by_id=model or None,
             image_width=row["width"] or 1280,
             image_height=row["height"] or 720,
+            iod=stored_iod,
         )
     ]
-    quality = evaluate_frame_quality(reviewed, model or None)
+    quality = evaluate_frame_quality(reviewed, model or None, iod=stored_iod)
     severity = sum(3.0 if item["level"] == "ERROR" else 2.0 for item in violations)
+    error_count = sum(1 for item in violations if item["level"] == "ERROR")
+    violation_count = len(violations)
+    res_kind = row["result_kind"] if "result_kind" in row.keys() else "annotated_face"
+    nme_val = quality["nme"] if res_kind != "unlabeled_face" else None
+    if res_kind == "unlabeled_face":
+        quality["nme"] = None
+        quality["nme_pct"] = None
+        quality["passed_nme"] = None
+
     conn.execute(
         """UPDATE face_frame_results SET iod = ?, nme = ?, quality_json = ?, violations_json = ?,
-             severity = ?, error_count = ?, case_type = ?, ai_reliability = ?, case_label = ?,
+             severity = ?, error_count = ?, violation_count = ?, case_type = ?, ai_reliability = ?, case_label = ?,
              case_description = ?, updated_at = ? WHERE id = ?""",
         (
-            float(quality["iod"]), float(quality["nme"]), json.dumps(quality, ensure_ascii=False),
-            json.dumps(violations, ensure_ascii=False), severity, len(violations), quality["case_type"],
-            float(quality["ai_reliability"]), quality["case_label"], quality["case_description"],
-            int(time.time()), result_id,
+            stored_iod, nme_val, json.dumps(quality, ensure_ascii=False),
+            json.dumps(violations, ensure_ascii=False), severity, error_count, violation_count,
+            quality["case_type"], float(quality["ai_reliability"]), quality["case_label"],
+            quality["case_description"], int(time.time()), result_id,
         ),
     )
 
@@ -163,26 +174,35 @@ def list_results(
     page_size: int = Query(50, ge=1, le=200),
     sort_by: str = Query("severity", pattern="^(severity|frame_index|nme)$"),
     filter_rule: str | None = None,
+    result_kind: str | None = Query("annotated_face"),
     _: sqlite3.Row = Depends(project_guard),
 ) -> dict[str, Any]:
     _face_run(project_id, run_id)
     order = {
         "severity": "f.severity DESC, f.error_count DESC, f.frame_index ASC",
         "frame_index": "f.frame_index ASC, f.face_index ASC",
-        "nme": "f.nme DESC, f.frame_index ASC",
+        "nme": "CASE WHEN f.nme IS NULL THEN 1 ELSE 0 END ASC, f.nme DESC, f.frame_index ASC",
     }[sort_by]
     where = ["f.run_id = ?"]
     params: list[Any] = [run_id]
+    if result_kind and result_kind != "all":
+        where.append("f.result_kind = ?")
+        params.append(result_kind)
     if filter_rule:
         where.append("f.violations_json LIKE ?")
         params.append(f'%"code": "{filter_rule}"%')
     predicate = " AND ".join(where)
     with db() as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM face_frame_results f WHERE {predicate}", params).fetchone()[0]
+        unlabeled_count = conn.execute(
+            "SELECT COUNT(*) FROM face_frame_results WHERE run_id = ? AND result_kind = 'unlabeled_face'",
+            (run_id,),
+        ).fetchone()[0]
         rows = conn.execute(
             f"""SELECT f.id, f.frame_index, f.face_index, f.iod, f.nme, f.severity,
-                       f.error_count, f.status, f.case_type, f.ai_reliability, f.case_label,
-                       f.violations_json, i.file_name, i.width, i.height
+                       f.error_count, f.violation_count, f.result_kind, f.iod_source, f.detector_confidence,
+                       f.status, f.case_type, f.ai_reliability, f.case_label,
+                       f.quality_json, f.violations_json, i.file_name, i.width, i.height
                 FROM face_frame_results f JOIN images i ON i.id = f.image_id
                 WHERE {predicate} ORDER BY {order} LIMIT ? OFFSET ?""",
             [*params, page_size, (page - 1) * page_size],
@@ -191,8 +211,21 @@ def list_results(
     for row in rows:
         item = dict(row)
         item["violations"] = json.loads(item.pop("violations_json") or "[]")
+        quality_data = json.loads(item.pop("quality_json") or "{}")
+        item["quality"] = quality_data
+        item["e_max"] = quality_data.get("e_max")
+        item["e_p90"] = quality_data.get("e_p90")
+        item["exceed_count"] = quality_data.get("exceed_count", 0)
+        item["has_outlier_point"] = quality_data.get("has_outlier_point", False)
+        item["evaluated_points_count"] = quality_data.get("evaluated_points_count", 0)
         items.append(item)
-    return {"total": total, "page": page, "page_size": page_size, "items": items}
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "unlabeled_count": unlabeled_count,
+        "items": items,
+    }
 
 
 @router.get("/results/{result_id}")

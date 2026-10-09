@@ -39,6 +39,8 @@ export default function FaceLandmarkPage() {
   const [busy, setBusy] = useState(false)
   const [sortBy, setSortBy] = useState('severity')
   const [filterRule, setFilterRule] = useState('')
+  const [resultKind, setResultKind] = useState('annotated_face')
+  const [unlabeledCount, setUnlabeledCount] = useState(0)
   const [showHuman, setShowHuman] = useState(true)
   const [showModel, setShowModel] = useState(true)
   const [showVectors, setShowVectors] = useState(true)
@@ -75,10 +77,12 @@ export default function FaceLandmarkPage() {
     if (!session || !targetRun) return
     const query = new URLSearchParams({ page_size: '200', sort_by: sortBy })
     if (filterRule) query.set('filter_rule', filterRule)
-    const data = await request<{ items: FaceResultSummary[] }>(
+    if (resultKind) query.set('result_kind', resultKind)
+    const data = await request<{ items: FaceResultSummary[]; unlabeled_count?: number }>(
       `/projects/${session.projectId}/runs/${targetRun}/face/results?${query}`,
     )
     setResults(data.items)
+    if (data.unlabeled_count !== undefined) setUnlabeledCount(data.unlabeled_count)
     if (data.items.length) await chooseResult(data.items[0], targetRun)
     else setSelected(null)
   }
@@ -101,7 +105,7 @@ export default function FaceLandmarkPage() {
 
   useEffect(() => {
     if (runId) loadResults().catch(error => setMessage(error.message))
-  }, [sortBy, filterRule])
+  }, [sortBy, filterRule, resultKind])
 
   const upload = async (event: FormEvent) => {
     event.preventDefault()
@@ -314,6 +318,11 @@ export default function FaceLandmarkPage() {
               <select value={filterRule} onChange={event => setFilterRule(event.target.value)}>
                 <option value="">Tất cả luật</option>{RULE_CODES.map(code => <option key={code}>{code}</option>)}
               </select>
+              <select value={resultKind} onChange={event => setResultKind(event.target.value)}>
+                <option value="annotated_face">Mặt có nhãn</option>
+                <option value="unlabeled_face">Mặt chưa nhãn ({unlabeledCount})</option>
+                <option value="all">Tất cả mặt</option>
+              </select>
             </div>
             <div className="face-actions">
               <button className="btn-success" onClick={batchFix}>Preview & xác nhận batch</button>
@@ -330,7 +339,13 @@ export default function FaceLandmarkPage() {
                 <button key={item.id} className={`face-result ${selected?.id === item.id ? 'active' : ''}`} onClick={() => chooseResult(item)}>
                   <span><b>Frame {item.frame_index}</b> · Face {item.face_index + 1}</span>
                   <small>{item.file_name}</small>
-                  <span><strong>{item.error_count} lỗi</strong> · NME {(item.nme * 100).toFixed(2)}% · {item.status}</span>
+                  <span>
+                    <strong>{item.error_count} lỗi{item.violation_count !== undefined ? ` / ${item.violation_count} vi phạm` : ''}</strong> ·
+                    {item.nme !== null && item.nme !== undefined ? ` NME ${(item.nme * 100).toFixed(2)}%` : ' NME N/A'} ·
+                    {item.status}
+                  </span>
+                  {item.has_outlier_point && <span className="face-tag" style={{ background: '#fef3c7', color: '#92400e', padding: '1px 5px', borderRadius: '3px', fontSize: '11px', display: 'inline-block', marginTop: '2px' }}>⚠️ Outlier</span>}
+                  {item.result_kind === 'unlabeled_face' && <span className="face-tag" style={{ background: '#e0e7ff', color: '#3730a3', padding: '1px 5px', borderRadius: '3px', fontSize: '11px', display: 'inline-block', marginTop: '2px' }}>Chưa gán nhãn</span>}
                   {item.case_type !== 'normal' && <em>{item.case_label}</em>}
                 </button>
               ))}
@@ -348,6 +363,14 @@ export default function FaceLandmarkPage() {
                     <button className="btn-outline" onClick={() => setScale(value => Math.min(4, value + .25))}>+</button>
                     <button className="btn-outline" onClick={() => setScale(value => Math.max(.5, value - .25))}>−</button>
                     <button className="btn-outline" onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }) }}>Reset</button>
+                  </div>
+                  <div className="face-metrics-bar" style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', padding: '6px 12px', background: '#f1f5f9', borderRadius: '6px', margin: '6px 0', fontSize: '13px' }}>
+                    <span>IOD: <b>{selected.iod?.toFixed(1)} px</b> ({selected.iod_source || 'model'})</span>
+                    <span>NME: <b>{selected.nme !== null && selected.nme !== undefined ? `${(selected.nme * 100).toFixed(2)}%` : 'N/A'}</b></span>
+                    <span>e_max: <b>{selected.quality?.e_max != null ? `${(selected.quality.e_max * 100).toFixed(2)}%` : 'N/A'}</b></span>
+                    <span>e_p90: <b>{selected.quality?.e_p90 != null ? `${(selected.quality.e_p90 * 100).toFixed(2)}%` : 'N/A'}</b></span>
+                    <span>Vượt ngưỡng: <b>{selected.quality?.exceed_count ?? 0}</b>/50 điểm</span>
+                    {selected.quality?.has_outlier_point && <span style={{ color: '#b91c1c', fontWeight: 600 }}>⚠️ Có điểm CRITICAL</span>}
                   </div>
                   <div className="face-canvas-stage">
                     <svg

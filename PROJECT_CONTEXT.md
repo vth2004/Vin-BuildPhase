@@ -90,12 +90,14 @@ Bảng `warnings`:
 - Bổ sung cột `delta REAL` (độ bất đồng $\delta$).
 
 Bảng `runs`:
-- Bổ sung cột `mode TEXT DEFAULT 'K2'`.
+- Bổ sung cột `mode TEXT DEFAULT 'K2'` (Face pipeline sử dụng `face_mediapipe_vf50` được dispatch tự động qua `execute_face_run`).
 - Bổ sung `error_message` để Face run báo lỗi model/parser minh bạch.
 
 Bảng Face riêng:
-- `face_frame_results`: kết quả model, rule violations, IOD/NME và trạng thái review.
-- `face_point_reviews`: lựa chọn Human/Model theo từng điểm; không sửa annotation nguồn.
+- `face_frame_results`: kết quả model (MediaPipe Face Landmarker thực tế, Hungarian bipartite matching, temporal jump checking), 14 luật kiểm định, IOD cố định từ Model (`iod_source`), NME chuẩn hóa và các chỉ số cấp mặt (`e_max`, `e_p90`, `exceed_count`, `has_outlier_point`).
+  - Migration `001_face_landmark_vf50`: bảng kết quả ban đầu.
+  - Migration `002_face_metrics_and_unlabeled`: `nme` chuyển sang nullable (NULL khi không có điểm đánh giá), `violation_count` (tổng vi phạm), `error_count` (chỉ cấp ERROR), `result_kind` ('annotated_face' vs 'unlabeled_face'), `iod_source`, `detector_confidence`.
+- `face_point_reviews`: lựa chọn Human/Model theo từng điểm; reviewer đổi nguồn điểm không làm thay đổi IOD gốc đã lưu.
 
 Bảng `images` bổ sung `frame_index`; `schema_migrations` quản lý migration idempotent và tạo backup trước lần nâng schema đầu tiên.
 

@@ -34,14 +34,23 @@ export type FaceResultSummary = {
   width: number
   height: number
   iod: number
-  nme: number
+  nme: number | null
   severity: number
   error_count: number
+  violation_count?: number
+  result_kind?: string
+  iod_source?: string
+  detector_confidence?: number | null
   status: string
   case_type: string
   ai_reliability: number
   case_label: string
   violations: Violation[]
+  e_max?: number | null
+  e_p90?: number | null
+  exceed_count?: number
+  has_outlier_point?: boolean
+  evaluated_points_count?: number
 }
 export type FaceResultDetail = FaceResultSummary & {
   human_keypoints: Record<string, Point>
@@ -49,7 +58,16 @@ export type FaceResultDetail = FaceResultSummary & {
   reviewed_keypoints: Record<string, Point>
   point_sources: Record<string, 'human' | 'model'>
   quality: {
-    point_evaluations?: Record<string, { exceeded: boolean; dist_px: number; norm_error_pct: number }>
+    iod?: number
+    nme?: number | null
+    nme_pct?: number | null
+    passed_nme?: boolean | null
+    e_max?: number | null
+    e_p90?: number | null
+    exceed_count?: number
+    has_outlier_point?: boolean
+    evaluated_points_count?: number
+    point_evaluations?: Record<string, { exceeded: boolean; dist_px: number; norm_error_pct: number; severity?: string; is_anchor?: boolean }>
     case_description?: string
   }
 }

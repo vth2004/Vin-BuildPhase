@@ -1,3 +1,15 @@
+# ==============================================================================
+# VinFast Face Landmark VF-50 Specification & Threshold Configuration
+# NGUỒN SỰ THẬT DUY NHẤT (SINGLE SOURCE OF TRUTH) CHO RULE VÀ SCORING
+#
+# LƯU Ý QUAN TRỌNG:
+# 1. Các ngưỡng bên dưới CHƯA được hiệu chỉnh bằng dữ liệu benchmark/thực nghiệm.
+# 2. R08 được đặt là 1.55 (trong tài liệu cũ ghi 1.45) để khớp đúng với mã nguồn
+#    đang chạy và characterization test hiện hành, tránh báo động giả.
+# 3. R13 dùng ngưỡng thích ứng theo scale: max(5.0, 15.0 * scale_factor) px
+#    (trong tài liệu cũ chỉ ghi tĩnh 15.0 px).
+# ==============================================================================
+
 schema_id: vf_face_landmark50_v1
 name: VinFast Face Landmark VF-50
 version: "1.3"
@@ -60,20 +72,86 @@ skeletons:
 # 12 Điểm neo theo Mục 5.5 & Mục 8 GL
 anchor_points: [0, 4, 5, 9, 10, 13, 14, 18, 22, 26, 30, 36]
 
-# Ngưỡng sai số theo Mục 8 GL (tỉ lệ IOD)
-tolerances:
-  anchor_point_iod_ratio: 0.03        # 3% IOD (~3 px)
-  contour_point_iod_ratio: 0.05       # 5% IOD (~5 px)
-  nme_max_threshold: 0.035            # NME toàn ảnh <= 0.035 (~3.4 px)
-  temporal_jump_max_px: 15.0          # Nhảy giữa 2 frame liên tiếp <= 15 px (Mục 6.9)
-  bridge_segment_max_ratio: 1.45      # Tỉ lệ đoạn sống mũi dài nhất / ngắn nhất <= 1.45
+# Ngưỡng đánh giá chất lượng (Scoring Quality & Tolerances) - Chưa hiệu chỉnh bằng dữ liệu
+scoring_tolerances:
+  anchor_point_iod_ratio: 0.03          # Dung sai điểm neo <= 3% IOD (~3 px)
+  contour_point_iod_ratio: 0.05         # Dung sai điểm viền <= 5% IOD (~5 px)
+  nme_max_threshold: 0.035              # NME toàn ảnh đạt khi <= 0.035 (~3.4 px)
+  severity_critical_multiplier: 1.8     # Điểm vượt 1.8 * tolerance coi là CRITICAL
+  suspicion_normalizer_multiplier: 2.5  # Chuẩn hóa suspicion e_norm / (2.5 * tolerance)
+  occluded_suspicion_discount: 0.6      # Giảm phạt 40% cho điểm occluded
+  min_iod_for_norm: 10.0                # Mẫu số tối thiểu max(iod, 10.0) px
 
-# Ngưỡng ẩn cả skeleton theo Mục 4.2 GL
-skeleton_visibility_thresholds:
-  mattrai: 4      # Ít hơn 4/8 điểm -> Outside cả skeleton
-  matphai: 4      # Ít hơn 4/8 điểm -> Outside cả skeleton
-  longmaytrai: 3  # Ít hơn 3/5 điểm -> Outside cả skeleton
-  longmayphai: 3  # Ít hơn 3/5 điểm -> Outside cả skeleton
-  moingoai: 6     # Ít hơn 6/12 điểm -> Outside cả skeleton
-  moitrong: 4     # Ít hơn 4/8 điểm -> Outside cả skeleton
-  songmui: 1      # Chỉ Outside khi cả 4 điểm khuất
+# Phân loại Face Scale & Ca khó (Hard cases)
+case_classification:
+  scale_close_min_iod: 80.0             # IOD >= 80 px -> CLOSE
+  scale_normal_min_iod: 38.0            # IOD >= 38 px -> NORMAL, còn lại FAR
+  sunglasses_min_eye_occluded: 4        # >= 4/16 điểm mắt occluded/outside
+  sunglasses_ai_reliability: 0.45       # Độ tin cậy AI cho kính râm
+  occluded_min_total_occluded: 6        # >= 6 điểm toàn mặt occluded/outside
+  occluded_ai_reliability: 0.58         # Độ tin cậy AI cho mặt che khuất
+  far_max_iod: 35.0                     # IOD < 35 px -> FAR
+  far_ai_reliability: 0.65              # Độ tin cậy AI cho mặt nhỏ ở xa
+  normal_ai_reliability: 0.95           # Độ tin cậy AI bình thường
+
+# Ngưỡng kiểm định 14 luật (Validation Rules) - Chưa hiệu chỉnh bằng dữ liệu
+rules:
+  scale_factor:
+    base_iod: 96.0                      # IOD trung vị quy đổi
+    min_scale: 0.25                     # Giới hạn dưới của scale_factor
+    max_scale: 2.5                      # Giới hạn trên của scale_factor
+
+  r04_eyebrow_monotonic:
+    min_points_evaluated: 8
+    min_tolerance_px: 1.5
+    scale_factor_multiplier: 5.0        # max(1.5, 5.0 * scale_factor)
+
+  r06_eyelid_tilt:
+    min_tolerance_px: 0.8
+    scale_factor_multiplier: 2.0        # max(0.8, 2.0 * scale_factor)
+
+  r08_nose_bridge:
+    max_ratio: 1.55                     # Giữ 1.55 theo code hiện hành (spec cũ 1.45)
+    min_segment_length_px: 1.0
+
+  r09_inner_lip:
+    corner_x_min_tolerance_px: 0.8
+    corner_x_scale_factor_multiplier: 2.0  # max(0.8, 2.0 * scale_factor)
+    contour_tolerance_multiplier: 2.0      # Dung sai tạm = 2.0 * scale_factor px
+
+  r10_skeleton_visibility:
+    mattrai: 4      # Ít hơn 4/8 điểm -> Outside cả skeleton
+    matphai: 4      # Ít hơn 4/8 điểm -> Outside cả skeleton
+    longmaytrai: 3  # Ít hơn 3/5 điểm -> Outside cả skeleton
+    longmayphai: 3  # Ít hơn 3/5 điểm -> Outside cả skeleton
+    moingoai: 6     # Ít hơn 6/12 điểm -> Outside cả skeleton
+    moitrong: 4     # Ít hơn 4/8 điểm -> Outside cả skeleton
+    songmui: 1      # Chỉ Outside khi cả 4 điểm khuất
+
+  r12_coincident_points:
+    min_threshold_px: 0.4
+    iod_ratio_multiplier: 0.012         # max(0.4, 0.012 * IOD)
+
+  r13_temporal_jump:
+    min_jump_px: 5.0
+    scale_factor_multiplier: 15.0       # max(5.0, 15.0 * scale_factor) (thay vì tĩnh 15 px)
+
+  r14_occluded_drift:
+    max_drift_iod_ratio: 0.15           # 15% IOD
+
+# Ngưỡng hình học và IOD (Geometry) - Chưa hiệu chỉnh bằng dữ liệu
+geometry:
+  iod:
+    min_eye_points: 4                   # Ít nhất 4 điểm mỗi mắt để tính tâm
+    min_eye_center_dist: 10.0           # Khoảng cách 2 tâm mắt tối thiểu
+    outer_corners_min_dist: 5.0         # Fallback 1: khoảng cách khóe ngoài tối thiểu
+    outer_corners_ratio: 0.65           # Fallback 1: 0.65 * outer_dist
+    face_width_min_points: 8            # Fallback 2: tối thiểu 8 điểm không outside
+    face_width_min_px: 10.0             # Fallback 2: bề rộng bbox mặt tối thiểu
+    face_width_min_result_px: 12.0      # Fallback 2: max(12.0, face_width * 0.42)
+    face_width_ratio: 0.42              # Fallback 2: hệ số bbox
+    default_iod_px: 96.0                # Fallback 3: mặc định nếu không đủ dữ liệu
+
+# Ghép khuôn mặt Annotation - Detection (Matching)
+matching:
+  cutoff_iod_multiplier: 2.0            # Ngưỡng cắt không ghép nếu dist > 2.0 * IOD

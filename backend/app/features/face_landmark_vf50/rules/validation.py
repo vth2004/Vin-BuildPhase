@@ -10,6 +10,7 @@ from .geometry import (
     compute_iod,
     euclidean_dist,
     has_self_intersection,
+    min_distance_to_polygon,
     point_in_polygon,
     rotate_point,
 )
@@ -31,16 +32,22 @@ def check_all_rules(
     model_keypoints_by_id: dict[int, dict[str, Any]] | None = None,
     image_width: int = 1280,
     image_height: int = 720,
+    iod: float | None = None,
 ) -> list[RuleViolation]:
     """
     Chạy toàn bộ 14 bộ luật (R01 - R14) kiểm tra nhãn Face VF-50 theo đúng Guideline BTC v1.3.
     """
-    violations: list[RuleViolation] = []
+    from ..spec import get_rules_spec
 
-    # Chuẩn hóa khoảng cách hình học theo IOD (Scale-Invariant Factor)
-    # Tránh nghịch lý: vật gần lệch 10px thì chấp nhận được, vật xa lệch 10px là lỗi nặng
-    iod_val = compute_iod(keypoints_by_id)
-    scale_factor = max(0.25, min(2.5, iod_val / 96.0))
+    rules_spec = get_rules_spec()
+    scale_cfg = rules_spec.get("scale_factor", {})
+    base_iod = scale_cfg.get("base_iod", 96.0)
+    min_scale = scale_cfg.get("min_scale", 0.25)
+    max_scale = scale_cfg.get("max_scale", 2.5)
+
+    iod_val = iod if iod is not None else compute_iod(keypoints_by_id)
+    scale_factor = max(min_scale, min(max_scale, iod_val / base_iod))
+    violations: list[RuleViolation] = []
 
     # =========================================================================
     # R01: ĐẦY ĐỦ CẤU TRÚC 50 ĐIỂM (0 đến 49)
@@ -141,9 +148,13 @@ def check_all_rules(
         for i in range(10)
         if i in keypoints_by_id and keypoints_by_id[i].get("x") is not None and keypoints_by_id[i].get("state") != "outside"
     ]
-    if len(brow_xs) >= 8:
+    r04_cfg = rules_spec.get("r04_eyebrow_monotonic", {})
+    if len(brow_xs) >= r04_cfg.get("min_points_evaluated", 8):
         # Kiểm tra xem có cặp nào x phía sau nhỏ hơn x phía trước quá dung sai không (thích ứng theo IOD)
-        tol_brow_x = max(1.5, 5.0 * scale_factor)
+        tol_brow_x = max(
+            r04_cfg.get("min_tolerance_px", 1.5),
+            r04_cfg.get("scale_factor_multiplier", 5.0) * scale_factor,
+        )
         inversions = []
         for idx in range(len(brow_xs) - 1):
             cur_id, cur_x = brow_xs[idx]
@@ -229,7 +240,11 @@ def check_all_rules(
             rot_btm = rotate_point(pt_btm, face_center, head_angle)
 
             # Mí trên phải cao hơn mí dưới (rot_top[1] <= rot_btm[1] + dung sai theo IOD)
-            tol_eyelid = max(0.8, 2.0 * scale_factor)
+            r06_cfg = rules_spec.get("r06_eyelid_tilt", {})
+            tol_eyelid = max(
+                r06_cfg.get("min_tolerance_px", 0.8),
+                r06_cfg.get("scale_factor_multiplier", 2.0) * scale_factor,
+            )
             if rot_top[1] > rot_btm[1] + tol_eyelid:
                 violations.append(
                     RuleViolation(
@@ -285,15 +300,18 @@ def check_all_rules(
         seg3 = euclidean_dist(p12, p13)
 
         segs = [seg1, seg2, seg3]
-        if min(segs) > 1.0:
+        r08_cfg = rules_spec.get("r08_nose_bridge", {})
+        min_seg = r08_cfg.get("min_segment_length_px", 1.0)
+        max_ratio = r08_cfg.get("max_ratio", 1.55)
+        if min(segs) > min_seg:
             ratio = max(segs) / min(segs)
-            if ratio > 1.55:
+            if ratio > max_ratio:
                 violations.append(
                     RuleViolation(
                         code="R08",
                         rule_name="Sống mũi chia không đều",
                         level="WARNING",
-                        message=f"3 đoạn sống mũi chênh lệch lớn (tỉ lệ max/min = {ratio:.2f} > 1.55). Lưu ý điểm 13 là chân sống mũi, không kéo xuống chóp mũi.",
+                        message=f"3 đoạn sống mũi chênh lệch lớn (tỉ lệ max/min = {ratio:.2f} > {max_ratio:.2f}). Lưu ý điểm 13 là chân sống mũi, không kéo xuống chóp mũi.",
                         points=[10, 11, 12, 13],
                         gl_section="Mục 3.2, 7.1",
                     )
@@ -315,7 +333,11 @@ def check_all_rules(
         and p30.get("state") != "outside" and p36.get("state") != "outside"
         and p42.get("state") != "outside" and p46.get("state") != "outside"
     ):
-        tol_lip = max(0.8, 2.0 * scale_factor)
+        r09_cfg = rules_spec.get("r09_inner_lip", {})
+        tol_lip = max(
+            r09_cfg.get("corner_x_min_tolerance_px", 0.8),
+            r09_cfg.get("corner_x_scale_factor_multiplier", 2.0) * scale_factor,
+        )
         if float(p42["x"]) < float(p30["x"]) - tol_lip:
             violations.append(
                 RuleViolation(
@@ -339,27 +361,36 @@ def check_all_rules(
                 )
             )
 
-    # Kiểm tra trọng tâm môi trong có nằm trong đa giác môi ngoài không
+    # Kiểm tra từng điểm môi trong (42-49) có nằm trong đa giác môi ngoài (30-41)
     outer_lip_poly = [
         (float(keypoints_by_id[i]["x"]), float(keypoints_by_id[i]["y"]))
         for i in range(30, 42)
         if i in keypoints_by_id and keypoints_by_id[i].get("x") is not None and keypoints_by_id[i].get("state") != "outside"
     ]
-    inner_lip_pts = [
-        (float(keypoints_by_id[i]["x"]), float(keypoints_by_id[i]["y"]))
-        for i in range(42, 50)
-        if i in keypoints_by_id and keypoints_by_id[i].get("x") is not None and keypoints_by_id[i].get("state") != "outside"
-    ]
-    if len(outer_lip_poly) >= 8 and len(inner_lip_pts) >= 4:
-        c_inner = compute_centroid(inner_lip_pts)
-        if not point_in_polygon(c_inner, outer_lip_poly):
+    if len(outer_lip_poly) >= 8:
+        r09_cfg = rules_spec.get("r09_inner_lip", {})
+        tol_inner_lip = r09_cfg.get("per_point_tolerance_px", 2.0) * scale_factor
+        violating_pts = []
+        for pid in range(42, 50):
+            kp = keypoints_by_id.get(pid)
+            if not kp or kp.get("x") is None or kp.get("y") is None or kp.get("state") == "outside":
+                continue
+            pt = (float(kp["x"]), float(kp["y"]))
+            if not point_in_polygon(pt, outer_lip_poly):
+                dist_to_poly = min_distance_to_polygon(pt, outer_lip_poly)
+                if dist_to_poly > tol_inner_lip:
+                    violating_pts.append(pid)
+        if violating_pts:
             violations.append(
                 RuleViolation(
                     code="R09",
-                    rule_name="Môi trong rơi ra ngoài môi ngoài",
+                    rule_name="Môi trong nằm ngoài môi ngoài",
                     level="ERROR",
-                    message="Tâm cụm điểm moitrong rơi ra ngoài đa giác viền moingoai.",
-                    points=list(range(30, 50)),
+                    message=(
+                        f"Có {len(violating_pts)} điểm moitrong nằm ngoài đa giác moingoai vượt dung sai "
+                        f"({tol_inner_lip:.1f}px): {violating_pts}."
+                    ),
+                    points=violating_pts,
                     gl_section="Mục 3.4, 7.1",
                 )
             )
@@ -369,12 +400,14 @@ def check_all_rules(
     # Nếu thấy ít hơn 4/8 điểm mắt -> phải Outside cả mắt.
     # Nếu thấy ít hơn 3/5 điểm lông mày -> phải Outside cả lông mày.
     # =========================================================================
-    for skel_name, start_id, end_id, threshold, total_pts in [
+    r10_cfg = rules_spec.get("r10_skeleton_visibility", {})
+    for skel_name, start_id, end_id, def_thresh, total_pts in [
         ("mattrai", 14, 21, 4, 8),
         ("matphai", 22, 29, 4, 8),
         ("longmaytrai", 0, 4, 3, 5),
         ("longmayphai", 5, 9, 3, 5),
     ]:
+        threshold = r10_cfg.get(skel_name, def_thresh)
         vis_pts = [
             i for i in range(start_id, end_id + 1)
             if i in keypoints_by_id and keypoints_by_id[i].get("state") == "visible"
@@ -436,8 +469,11 @@ def check_all_rules(
         and keypoints_by_id[i].get("x") is not None
         and (keypoints_by_id[i].get("state") == "visible" or keypoints_by_id[i].get("state") is None)
     ]
+    r12_cfg = rules_spec.get("r12_coincident_points", {})
+    min_coincident_px = r12_cfg.get("min_threshold_px", 0.4)
+    iod_ratio_coincident = r12_cfg.get("iod_ratio_multiplier", 0.012)
     iod_for_coincident = compute_iod(keypoints_by_id)
-    coincident_threshold = max(0.4, 0.012 * iod_for_coincident)
+    coincident_threshold = max(min_coincident_px, iod_ratio_coincident * iod_for_coincident)
     coincident_found = []
     for i in range(len(visible_pts)):
         for j in range(i + 1, len(visible_pts)):
@@ -466,6 +502,11 @@ def check_all_rules(
     # Nếu nhãn nhảy > 15px giữa hai frame liền kề -> Cảnh báo.
     # =========================================================================
     if prev_keypoints_by_id:
+        r13_cfg = rules_spec.get("r13_temporal_jump", {})
+        min_jump_px = r13_cfg.get("min_jump_px", 5.0)
+        jump_scale_mul = r13_cfg.get("scale_factor_multiplier", 15.0)
+        tol_jump = max(min_jump_px, jump_scale_mul * scale_factor)
+
         jumping_pts = []
         for i in range(50):
             cur_p = keypoints_by_id.get(i)
@@ -479,7 +520,6 @@ def check_all_rules(
                     float(cur_p["x"]) - float(prev_p["x"]),
                     float(cur_p["y"]) - float(prev_p["y"]),
                 )
-                tol_jump = max(5.0, 15.0 * scale_factor)
                 if dist_jump > tol_jump:
                     jumping_pts.append((i, round(dist_jump, 1)))
         if jumping_pts:
@@ -500,7 +540,8 @@ def check_all_rules(
     # không được giữ nguyên vị trí sai của pre-label rồi đánh Occluded.
     # =========================================================================
     if model_keypoints_by_id:
-        iod_val = compute_iod(keypoints_by_id)
+        r14_cfg = rules_spec.get("r14_occluded_drift", {})
+        drift_ratio = r14_cfg.get("max_drift_iod_ratio", 0.15)
         bad_occluded = []
         for i in range(50):
             kp = keypoints_by_id.get(i)
@@ -515,7 +556,7 @@ def check_all_rules(
                     float(kp["y"]) - float(mkp["y"]),
                 )
                 # Nếu lệch hơn 15% IOD (~15px) so với vị trí model gợi ý
-                if dist_to_m > 0.15 * iod_val:
+                if dist_to_m > drift_ratio * iod_val:
                     bad_occluded.append(i)
         if bad_occluded:
             violations.append(
