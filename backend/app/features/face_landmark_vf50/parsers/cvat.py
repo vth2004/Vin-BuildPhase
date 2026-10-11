@@ -176,11 +176,18 @@ def parse_cvat_xml(xml_content: str | bytes) -> list[dict[str, Any]]:
             width = int(img_el.get("width", 1280))
             height = int(img_el.get("height", 720))
 
-            keypoints_by_id: dict[int, dict[str, Any]] = {}
+            # CVAT stores each of the seven VF50 skeletons as an element. They
+            # belong to one face when group_id is absent, or to the same face
+            # when group_id matches. Do not collapse different group_id values.
+            faces_by_group: dict[str, dict[int, dict[str, Any]]] = {}
+
+            def target_points(group_id: str | None = None) -> dict[int, dict[str, Any]]:
+                return faces_by_group.setdefault(group_id or "__ungrouped__", {})
 
             # A. Skeletons
             for skel_el in img_el.findall("skeleton"):
                 skel_label = skel_el.get("label", "")
+                keypoints_by_id = target_points(skel_el.get("group_id"))
                 pts_list = skel_el.findall("points")
                 for idx_in_skel, pt_el in enumerate(pts_list):
                     raw_label = pt_el.get("label", "")
@@ -221,6 +228,7 @@ def parse_cvat_xml(xml_content: str | bytes) -> list[dict[str, Any]]:
                     }
 
             # B. Direct <points> (nằm trực tiếp dưới <image> không qua <skeleton>)
+            keypoints_by_id = target_points()
             for pt_el in img_el.findall("points"):
                 raw_label = pt_el.get("label", "")
                 label_id = pt_el.get("label_id", "")
@@ -257,12 +265,14 @@ def parse_cvat_xml(xml_content: str | bytes) -> list[dict[str, Any]]:
                     "state": state,
                 }
 
-            parsed_images.append({
-                "file_name": file_name.replace("\\", "/"),
-                "width": width,
-                "height": height,
-                "keypoints": keypoints_by_id,
-            })
+            for keypoints_by_id in faces_by_group.values():
+                if keypoints_by_id:
+                    parsed_images.append({
+                        "file_name": file_name.replace("\\", "/"),
+                        "width": width,
+                        "height": height,
+                        "keypoints": keypoints_by_id,
+                    })
 
         return parsed_images
 

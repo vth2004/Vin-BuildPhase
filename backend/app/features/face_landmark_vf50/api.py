@@ -185,9 +185,14 @@ def list_results(
     }[sort_by]
     where = ["f.run_id = ?"]
     params: list[Any] = [run_id]
-    if result_kind and result_kind != "all":
-        where.append("f.result_kind = ?")
-        params.append(result_kind)
+    if result_kind == "annotated_face":
+        # annotation_id is authoritative. Older runs created before result_kind
+        # existed can otherwise show unmatched MediaPipe detections or individual
+        # skeleton fragments as fake faces.
+        where.append("f.annotation_id IS NOT NULL")
+        where.append("f.nme IS NOT NULL")
+    elif result_kind == "unlabeled_face":
+        where.append("f.annotation_id IS NULL")
     if filter_rule:
         where.append("f.violations_json LIKE ?")
         params.append(f'%"code": "{filter_rule}"%')

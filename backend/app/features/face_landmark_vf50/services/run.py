@@ -40,6 +40,41 @@ def _centroid(points: dict[int, dict[str, Any]]) -> tuple[float, float] | None:
     return sum(point[0] for point in visible) / len(visible), sum(point[1] for point in visible) / len(visible)
 
 
+def _merge_split_skeleton_annotations(annotations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recover one VF50 face from seven legacy skeleton-only annotation rows.
+
+    Earlier imports could persist each VF50 skeleton as a separate annotation.
+    Those rows have disjoint populated point IDs (brow, eye, lip, ...), whereas
+    real multiple face annotations overlap on the same VF50 IDs. Merge only the
+    provably disjoint case in memory; the source annotation rows remain intact.
+    """
+    if len(annotations) < 2:
+        return annotations
+
+    populated_sets = [
+        {
+            point_id for point_id, point in annotation["keypoints"].items()
+            if point.get("state") != "outside" and point.get("x") is not None and point.get("y") is not None
+        }
+        for annotation in annotations
+    ]
+    non_empty = [point_ids for point_ids in populated_sets if point_ids]
+    if len(non_empty) < 2:
+        return annotations
+    union = set().union(*non_empty)
+    if len(union) <= max(len(point_ids) for point_ids in non_empty) or sum(map(len, non_empty)) != len(union):
+        return annotations
+
+    merged_points: dict[int, dict[str, Any]] = {}
+    for point_id in range(50):
+        candidates = [annotation["keypoints"].get(point_id) for annotation in annotations]
+        populated = next((point for point in candidates if point and point_id in union and point.get("state") != "outside"), None)
+        merged_points[point_id] = dict(populated or next((point for point in candidates if point), {
+            "id": point_id, "name": str(point_id), "x": None, "y": None, "state": "outside",
+        }))
+    return [{"id": annotations[0]["id"], "keypoints": merged_points}]
+
+
 def _match_faces(
     annotations: list[dict[str, Any]],
     detections: list[dict[int, dict[str, Any]]],
@@ -191,6 +226,7 @@ def execute_face_run(run_id: str) -> None:
             {"id": row["id"], "keypoints": _point_mapping(row["keypoints_json"])}
             for row in annotation_rows
         ]
+        annotations = _merge_split_skeleton_annotations(annotations)
         detections = [_model_mapping(face[0]) for face in detector.detect_all_faces(pixels)]
         matches = _match_faces(annotations, detections)
         if not matches:

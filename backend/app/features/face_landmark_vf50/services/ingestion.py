@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from ..parsers.cvat import parse_annotation_payload
+from ..parsers.cvat import SKELETON_ALIASES, parse_annotation_payload
 
 
 def _match_image(raw_name: str, image_names: set[str]) -> str:
@@ -52,6 +52,36 @@ def _parse_single_payload(content: bytes) -> list[dict[str, Any]]:
     ]
 
 
+def _coco_uses_separate_skeleton_annotations(payload: dict[str, Any]) -> bool:
+    """Recognize CVAT/COCO exports where one face is split into seven skeleton annotations.
+
+    A VF50 face is one review unit. Treating its eyebrow, eye and lip categories as
+    independent faces creates the misleading ``Face 1 ... Face 7`` list in the UI.
+    Full-face COCO annotations keep the existing multi-face behavior.
+    """
+    categories = {
+        str(category.get("id")): str(category.get("name", "")).strip().lower()
+        for category in payload.get("categories", [])
+        if category.get("id") is not None
+    }
+    annotations = payload.get("annotations", [])
+    if not annotations:
+        return False
+    names = [categories.get(str(annotation.get("category_id")), "") for annotation in annotations]
+    return bool(names) and all(name in SKELETON_ALIASES for name in names)
+
+
+def _coco_face_group(annotation: dict[str, Any]) -> str | None:
+    """Read common CVAT/COCO instance grouping fields without inventing a match."""
+    attributes = annotation.get("attributes")
+    attrs = attributes if isinstance(attributes, dict) else {}
+    for key in ("group_id", "group", "instance_id", "face_id"):
+        value = annotation.get(key, attrs.get(key))
+        if value is not None and str(value) != "":
+            return str(value)
+    return None
+
+
 def parse_face_annotations(content: bytes, image_names: set[str]) -> list[dict[str, Any]]:
     """Normalize supported VF50 formats to the core dataset representation."""
     try:
@@ -59,26 +89,52 @@ def parse_face_annotations(content: bytes, image_names: set[str]) -> list[dict[s
     except (UnicodeDecodeError, json.JSONDecodeError):
         payload = None
 
-    # Preserve multiple COCO face annotations by parsing each annotation independently.
+    # A CVAT COCO export can represent one VF50 face as seven skeleton categories.
+    # Merge those parts first; otherwise they become seven fake "faces" in a run.
     if isinstance(payload, dict) and isinstance(payload.get("images"), list) and isinstance(payload.get("annotations"), list):
-        output_by_name: dict[str, dict[str, Any]] = {}
-        for image in payload["images"]:
-            image_id = image.get("id")
-            matching = [annotation for annotation in payload["annotations"] if annotation.get("image_id") == image_id]
-            for annotation in matching:
-                partial = dict(payload)
-                partial["images"] = [image]
-                partial["annotations"] = [annotation]
-                for record in _parse_single_payload(json.dumps(partial).encode("utf-8")):
-                    name = _match_image(record["file_name"], image_names)
-                    target = output_by_name.setdefault(name, {
-                        "file_name": name,
-                        "width": record.get("width"),
-                        "height": record.get("height"),
-                        "annotations": [],
-                    })
-                    target["annotations"].extend(record["annotations"])
-        output = list(output_by_name.values())
+        if _coco_uses_separate_skeleton_annotations(payload):
+            # Preserve multiple faces when the COCO producer provides an
+            # instance/group identifier. Without one, the seven category parts
+            # describe a single face and must be merged into one annotation.
+            groups = {_coco_face_group(annotation) for annotation in payload["annotations"]}
+            groups.discard(None)
+            if not groups:
+                output = _parse_single_payload(content)
+            else:
+                output = []
+                for image in payload["images"]:
+                    image_id = image.get("id")
+                    for group_id in sorted(groups):
+                        parts = [
+                            annotation for annotation in payload["annotations"]
+                            if annotation.get("image_id") == image_id and _coco_face_group(annotation) == group_id
+                        ]
+                        if not parts:
+                            continue
+                        partial = dict(payload)
+                        partial["images"] = [image]
+                        partial["annotations"] = parts
+                        output.extend(_parse_single_payload(json.dumps(partial).encode("utf-8")))
+        else:
+            # Preserve multiple complete face annotations in normal COCO exports.
+            output_by_name: dict[str, dict[str, Any]] = {}
+            for image in payload["images"]:
+                image_id = image.get("id")
+                matching = [annotation for annotation in payload["annotations"] if annotation.get("image_id") == image_id]
+                for annotation in matching:
+                    partial = dict(payload)
+                    partial["images"] = [image]
+                    partial["annotations"] = [annotation]
+                    for record in _parse_single_payload(json.dumps(partial).encode("utf-8")):
+                        name = _match_image(record["file_name"], image_names)
+                        target = output_by_name.setdefault(name, {
+                            "file_name": name,
+                            "width": record.get("width"),
+                            "height": record.get("height"),
+                            "annotations": [],
+                        })
+                        target["annotations"].extend(record["annotations"])
+            output = list(output_by_name.values())
     elif isinstance(payload, dict) and payload.get("format") == "landmark-qa/v1":
         output = []
         for image in payload.get("images", []):
@@ -96,10 +152,18 @@ def parse_face_annotations(content: bytes, image_names: set[str]) -> list[dict[s
                 })
     else:
         output = _parse_single_payload(content)
-        for record in output:
-            record["file_name"] = _match_image(record["file_name"], image_names)
+    output_by_name: dict[str, dict[str, Any]] = {}
+    for record in output:
+        name = _match_image(record["file_name"], image_names)
+        target = output_by_name.setdefault(name, {
+            "file_name": name,
+            "width": record.get("width"),
+            "height": record.get("height"),
+            "annotations": [],
+        })
+        target["annotations"].extend(record.get("annotations", []))
 
-    output = [record for record in output if record.get("annotations")]
+    output = [record for record in output_by_name.values() if record.get("annotations")]
     if not output:
         raise HTTPException(400, "No usable VF50 annotations match the uploaded images")
     return output

@@ -6,6 +6,7 @@ import { RULE_CODES, VF50_EDGES, VF50_GROUPS } from './vf50'
 import './face.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+type PointDisplayMode = 'suspect' | 'all'
 
 function savedSession(): Session | null {
   try {
@@ -22,6 +23,20 @@ function pointAt(points: Record<string, Point>, id: number): Point | undefined {
 
 function usable(point?: Point): point is Point {
   return !!point && point.state !== 'outside' && point.x !== null && point.y !== null
+}
+
+function suspiciousPointIds(result: FaceResultDetail): number[] {
+  const ids = new Set<number>()
+  result.violations.forEach(item => item.points.forEach(id => ids.add(id)))
+  Object.entries(result.quality?.point_evaluations || {}).forEach(([id, evaluation]) => {
+    if (evaluation.exceeded || evaluation.severity === 'CRITICAL' || evaluation.severity === 'WARNING') ids.add(Number(id))
+  })
+  return [...ids].filter(id => id >= 0 && id < 50).sort((a, b) => a - b)
+}
+
+function pointGroup(id: number): string {
+  const group = VF50_GROUPS.find(([, start, end]) => id >= start && id <= end)
+  return group?.[0] || 'VF50'
 }
 
 export default function FaceLandmarkPage() {
@@ -45,6 +60,7 @@ export default function FaceLandmarkPage() {
   const [showModel, setShowModel] = useState(true)
   const [showVectors, setShowVectors] = useState(true)
   const [showSkeleton, setShowSkeleton] = useState(true)
+  const [pointDisplayMode, setPointDisplayMode] = useState<PointDisplayMode>('suspect')
   const [guidelineOpen, setGuidelineOpen] = useState(false)
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
@@ -81,9 +97,15 @@ export default function FaceLandmarkPage() {
     const data = await request<{ items: FaceResultSummary[]; unlabeled_count?: number }>(
       `/projects/${session.projectId}/runs/${targetRun}/face/results?${query}`,
     )
-    setResults(data.items)
+    const actionable = data.items.filter(item =>
+      item.error_count > 0
+      || (item.violation_count || 0) > 0
+      || (item.exceed_count || 0) > 0
+      || (item.nme !== null && item.nme > 0.035),
+    )
+    setResults(actionable)
     if (data.unlabeled_count !== undefined) setUnlabeledCount(data.unlabeled_count)
-    if (data.items.length) await chooseResult(data.items[0], targetRun)
+    if (actionable.length) await chooseResult(actionable[0], targetRun)
     else setSelected(null)
   }
 
@@ -93,8 +115,8 @@ export default function FaceLandmarkPage() {
       `/projects/${session.projectId}/runs/${targetRun}/face/results/${item.id}`,
     )
     setSelected(detail)
-    const firstViolationPoint = detail.violations.flatMap(item => item.points)[0]
-    setSelectedPoint(firstViolationPoint ?? 0)
+    const firstViolationPoint = detail.violations.flatMap(item => item.points).find(id => id >= 0 && id < 50)
+    setSelectedPoint(firstViolationPoint ?? suspiciousPointIds(detail)[0] ?? 0)
     setScale(1)
     setOffset({ x: 0, y: 0 })
   }
@@ -246,6 +268,16 @@ export default function FaceLandmarkPage() {
   }
 
   const reviewedPoints = selected?.reviewed_keypoints || {}
+  const reviewPointIds = useMemo(() => {
+    if (!selected) return []
+    return pointDisplayMode === 'all' ? Array.from({ length: 50 }, (_, id) => id) : suspiciousPointIds(selected)
+  }, [selected, pointDisplayMode])
+  const renderedPointIds = useMemo(() => {
+    const ids = new Set(reviewPointIds)
+    if (pointDisplayMode === 'all' && selectedPoint >= 0 && selectedPoint < 50) ids.add(selectedPoint)
+    return ids
+  }, [reviewPointIds, selectedPoint, pointDisplayMode])
+  const selectedEvaluation = selected?.quality?.point_evaluations?.[String(selectedPoint)]
   const onPointerDown = (event: PointerEvent<SVGSVGElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId)
     drag.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y }
@@ -349,13 +381,18 @@ export default function FaceLandmarkPage() {
                   {item.case_type !== 'normal' && <em>{item.case_label}</em>}
                 </button>
               ))}
-              {!results.length && <p className="face-muted">Run chưa có kết quả.</p>}
+              {!results.length && <p className="face-muted">Không có frame nào cần review.</p>}
             </aside>
 
             <div className="face-inspector">
               {!selected ? <p className="face-muted">Chọn một frame để kiểm tra.</p> : (
                 <>
                   <div className="face-view-controls">
+                    <span className="face-control-label">Hiển thị:</span>
+                    <div className="face-display-mode" role="group" aria-label="Chế độ hiển thị điểm">
+                      <button className={pointDisplayMode === 'suspect' ? 'active' : ''} onClick={() => setPointDisplayMode('suspect')}>Điểm nghi ngờ</button>
+                      <button className={pointDisplayMode === 'all' ? 'active' : ''} onClick={() => setPointDisplayMode('all')}>Tất cả điểm</button>
+                    </div>
                     <label><input type="checkbox" checked={showHuman} onChange={event => setShowHuman(event.target.checked)} /> Human</label>
                     <label><input type="checkbox" checked={showModel} onChange={event => setShowModel(event.target.checked)} /> Model</label>
                     <label><input type="checkbox" checked={showVectors} onChange={event => setShowVectors(event.target.checked)} /> Vector</label>
@@ -367,10 +404,8 @@ export default function FaceLandmarkPage() {
                   <div className="face-metrics-bar" style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', padding: '6px 12px', background: '#f1f5f9', borderRadius: '6px', margin: '6px 0', fontSize: '13px' }}>
                     <span>IOD: <b>{selected.iod?.toFixed(1)} px</b> ({selected.iod_source || 'model'})</span>
                     <span>NME: <b>{selected.nme !== null && selected.nme !== undefined ? `${(selected.nme * 100).toFixed(2)}%` : 'N/A'}</b></span>
-                    <span>e_max: <b>{selected.quality?.e_max != null ? `${(selected.quality.e_max * 100).toFixed(2)}%` : 'N/A'}</b></span>
-                    <span>e_p90: <b>{selected.quality?.e_p90 != null ? `${(selected.quality.e_p90 * 100).toFixed(2)}%` : 'N/A'}</b></span>
-                    <span>Vượt ngưỡng: <b>{selected.quality?.exceed_count ?? 0}</b>/50 điểm</span>
-                    {selected.quality?.has_outlier_point && <span style={{ color: '#b91c1c', fontWeight: 600 }}>⚠️ Có điểm CRITICAL</span>}
+                    <span>Điểm cần xem: <b>{suspiciousPointIds(selected).length}</b></span>
+                    {selected.quality?.has_outlier_point && <span style={{ color: '#b91c1c', fontWeight: 600 }}>⚠️ Có điểm lệch nặng</span>}
                   </div>
                   <div className="face-canvas-stage">
                     <svg
@@ -383,15 +418,28 @@ export default function FaceLandmarkPage() {
                     >
                       <image href={imageUrl} width={selected.width || 1280} height={selected.height || 720} />
                       {showSkeleton && VF50_EDGES.map(([from, to]) => {
-                        const a = pointAt(reviewedPoints, from), b = pointAt(reviewedPoints, to)
-                        return usable(a) && usable(b) ? <line key={`${from}-${to}`} x1={a.x!} y1={a.y!} x2={b.x!} y2={b.y!} className="face-edge" /> : null
+                        const humanA = pointAt(selected.human_keypoints, from), humanB = pointAt(selected.human_keypoints, to)
+                        const modelA = pointAt(selected.model_keypoints, from), modelB = pointAt(selected.model_keypoints, to)
+                        return <g key={`${from}-${to}`}>
+                          {showHuman && usable(humanA) && usable(humanB) && <line x1={humanA.x!} y1={humanA.y!} x2={humanB.x!} y2={humanB.y!} className="face-edge face-edge-human" style={{ strokeWidth: 0.9 / scale }} />}
+                          {showModel && pointDisplayMode === 'all' && usable(modelA) && usable(modelB) && <line x1={modelA.x!} y1={modelA.y!} x2={modelB.x!} y2={modelB.y!} className="face-edge face-edge-model" style={{ strokeWidth: 0.9 / scale }} />}
+                        </g>
                       })}
                       {showVectors && Array.from({ length: 50 }, (_, id) => {
                         const human = pointAt(selected.human_keypoints, id), model = pointAt(selected.model_keypoints, id)
-                        return usable(human) && usable(model) ? <line key={`v-${id}`} x1={human.x!} y1={human.y!} x2={model.x!} y2={model.y!} className="face-vector" /> : null
+                        return renderedPointIds.has(id) && usable(human) && usable(model) ? <line key={`v-${id}`} x1={human.x!} y1={human.y!} x2={model.x!} y2={model.y!} className="face-vector" style={{ strokeWidth: 0.9 / scale }} /> : null
                       })}
-                      {showHuman && Object.values(selected.human_keypoints).map(point => usable(point) ? <circle key={`h-${point.id}`} cx={point.x!} cy={point.y!} r={point.id === selectedPoint ? 6 : 3.5} className="face-point-human" onClick={() => setSelectedPoint(point.id)} /> : null)}
-                      {showModel && Object.values(selected.model_keypoints).map(point => usable(point) ? <circle key={`m-${point.id}`} cx={point.x!} cy={point.y!} r={point.id === selectedPoint ? 6 : 3.5} className="face-point-model" onClick={() => setSelectedPoint(point.id)} /> : null)}
+                      {showHuman && Object.values(selected.human_keypoints).map(point => {
+                        if (!usable(point)) return null
+                        const isSuspect = pointDisplayMode === 'suspect' && renderedPointIds.has(point.id)
+                        return <circle key={`h-${point.id}`} cx={point.x!} cy={point.y!} r={(isSuspect ? 1.8 : 1.1) / scale} strokeWidth={(isSuspect ? 0.65 : 0) / scale} className={`face-point-human${isSuspect ? ' face-point-human-suspect' : ''}`} onClick={event => { event.stopPropagation(); setSelectedPoint(point.id) }} />
+                      })}
+                      {showModel && Object.values(selected.model_keypoints).map(point => usable(point) && renderedPointIds.has(point.id) ? <circle key={`m-${point.id}`} cx={point.x!} cy={point.y!} r={1.8 / scale} strokeWidth={0.65 / scale} className="face-point-model" onClick={event => { event.stopPropagation(); setSelectedPoint(point.id) }} /> : null)}
+                      {pointDisplayMode === 'suspect' && Array.from(renderedPointIds).map(id => {
+                        const point = pointAt(selected.human_keypoints, id) || pointAt(selected.model_keypoints, id)
+                        const labelOnRight = id % 2 === 1
+                        return usable(point) ? <text key={`id-${id}`} x={point.x! + (labelOnRight ? 3 : -3) / scale} y={point.y! + 1.5 / scale} textAnchor={labelOnRight ? 'start' : 'end'} fontSize={3.5 / scale} strokeWidth={0.35 / scale} className="face-suspect-id">{id}</text> : null
+                      })}
                     </svg>
                   </div>
 
@@ -406,15 +454,21 @@ export default function FaceLandmarkPage() {
                       {!selected.violations.length && <p className="face-ok">Không phát hiện vi phạm rule.</p>}
                     </div>
                     <div className="face-point-review">
-                      <h3>Duyệt điểm {selectedPoint}</h3>
+                      <h3>Duyệt điểm {selectedPoint} · {pointGroup(selectedPoint)}</h3>
                       <p>Nguồn hiện tại: <b>{selected.point_sources[String(selectedPoint)] || (Object.keys(selected.human_keypoints).length ? 'human' : 'model')}</b></p>
+                      {selectedEvaluation && <p className="face-point-metric">Lệch <b>{selectedEvaluation.dist_px.toFixed(1)} px</b> · <b>{selectedEvaluation.norm_error_pct.toFixed(1)}% IOD</b>{selectedEvaluation.is_anchor ? ' · Điểm neo' : ''}</p>}
                       <button className="btn-success" disabled={!pointAt(selected.human_keypoints, selectedPoint)} onClick={() => setSource(selectedPoint, 'human')}>Giữ Human</button>
                       <button disabled={!usable(pointAt(selected.model_keypoints, selectedPoint))} onClick={() => setSource(selectedPoint, 'model')}>Lấy Model</button>
-                      <div className="face-point-grid">
-                        {Array.from({ length: 50 }, (_, id) => {
+                      <div className="face-review-list">
+                        {reviewPointIds.map(id => {
                           const source = selected.point_sources[String(id)] || (Object.keys(selected.human_keypoints).length ? 'human' : 'model')
-                          return <button key={id} className={`${id === selectedPoint ? 'active' : ''} source-${source}`} onClick={() => setSelectedPoint(id)}>{id}</button>
+                          const evaluation = selected.quality?.point_evaluations?.[String(id)]
+                          return <button key={id} className={`${id === selectedPoint ? 'active' : ''} source-${source}`} onClick={() => setSelectedPoint(id)}>
+                            <b>#{id} · {pointGroup(id)}</b>
+                            <span>{evaluation ? `${evaluation.dist_px.toFixed(1)} px · ${evaluation.norm_error_pct.toFixed(1)}% IOD` : 'Vi phạm guideline'}</span>
+                          </button>
                         })}
+                        {!reviewPointIds.length && <p className="face-ok">Không có điểm vượt ngưỡng hoặc nằm trong vi phạm.</p>}
                       </div>
                     </div>
                   </div>

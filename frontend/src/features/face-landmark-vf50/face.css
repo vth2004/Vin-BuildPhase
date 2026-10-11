@@ -66,6 +66,11 @@ button.face-result.active { background: #f5f3ff; box-shadow: inset 4px 0 #7c3aed
 .face-view-controls label { display: flex; align-items: center; gap: 4px; }
 .face-view-controls input { margin: 0; }
 .face-view-controls button { padding: 5px 10px; }
+.face-control-label { color: #475569; font-weight: 700; }
+.face-display-mode { display: inline-flex; overflow: hidden; border: 1px solid #cbd5e1; border-radius: 6px; }
+.face-display-mode button { color: #475569; background: #fff; border: 0; border-radius: 0; }
+.face-display-mode button + button { border-left: 1px solid #cbd5e1; }
+.face-display-mode button.active { color: white; background: #7c3aed; }
 
 .face-canvas-stage {
   position: relative;
@@ -87,10 +92,14 @@ button.face-result.active { background: #f5f3ff; box-shadow: inset 4px 0 #7c3aed
 }
 
 .face-canvas-stage svg:active { cursor: grabbing; }
-.face-edge { stroke: #38bdf8; stroke-width: 1.5; stroke-opacity: .8; pointer-events: none; }
-.face-vector { stroke: #facc15; stroke-width: 1.2; stroke-dasharray: 4 3; pointer-events: none; }
-.face-point-human { fill: #22c55e; stroke: white; stroke-width: 1.2; cursor: pointer; }
-.face-point-model { fill: #f43f5e; stroke: white; stroke-width: 1.2; cursor: pointer; }
+.face-edge { fill: none; stroke-opacity: .62; pointer-events: none; }
+.face-edge-human { stroke: #0d9488; }
+.face-edge-model { stroke: #e11d48; stroke-dasharray: 2 2; }
+.face-vector { stroke: #f59e0b; stroke-dasharray: 3 2; pointer-events: none; }
+.face-point-human { fill: #0d9488; cursor: pointer; }
+.face-point-human-suspect { fill: #22c55e; stroke: #ffffff; }
+.face-point-model { fill: #ef4444; stroke: #ffffff; cursor: pointer; }
+.face-suspect-id { fill: #111827; stroke: #ffffff; paint-order: stroke; font-weight: 600; pointer-events: none; }
 
 .face-detail-grid {
   display: grid;
@@ -108,10 +117,12 @@ button.face-result.active { background: #f5f3ff; box-shadow: inset 4px 0 #7c3aed
 .face-violations small { color: #64748b; }
 .face-ok { color: #15803d; font-weight: 700; }
 
-.face-point-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; margin-top: 14px; }
-.face-point-grid button { padding: 6px 2px; font-size: .72rem; background: #64748b; }
-.face-point-grid button.source-model { background: #e11d48; }
-.face-point-grid button.active { outline: 3px solid #facc15; outline-offset: 1px; }
+.face-point-metric { margin: 6px 0 10px; color: #475569; font-size: .82rem; }
+.face-review-list { display: grid; gap: 5px; max-height: 255px; margin-top: 14px; overflow: auto; }
+.face-review-list button { display: grid; gap: 2px; padding: 7px 9px; color: #334155; text-align: left; background: white; border: 1px solid #e2e8f0; }
+.face-review-list button span { color: #64748b; font-size: .74rem; }
+.face-review-list button.source-model { border-left: 4px solid #e11d48; }
+.face-review-list button.active { color: #4c1d95; background: #f5f3ff; outline: 2px solid #a78bfa; outline-offset: -2px; }
 
 .face-muted { padding: 20px; color: #94a3b8; text-align: center; }
 .face-empty { max-width: 620px; margin: 70px auto; text-align: center; }
