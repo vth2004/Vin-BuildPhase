@@ -27,7 +27,7 @@ class FaceMigrationTests(unittest.TestCase):
                     CREATE TABLE images (id TEXT PRIMARY KEY, dataset_id TEXT NOT NULL, file_name TEXT NOT NULL, width INTEGER, height INTEGER, UNIQUE(dataset_id, file_name));
                     CREATE TABLE annotations (id TEXT PRIMARY KEY, image_id TEXT NOT NULL, label TEXT NOT NULL, keypoints_json TEXT NOT NULL);
                     CREATE TABLE runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, dataset_id TEXT NOT NULL, status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0, mode TEXT DEFAULT 'K2', created_at INTEGER NOT NULL);
-                    CREATE TABLE warnings (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, image_name TEXT NOT NULL, keypoint TEXT NOT NULL, warning_type TEXT NOT NULL, suspicion REAL NOT NULL, human_x REAL NOT NULL, human_y REAL NOT NULL, suggested_x REAL NOT NULL, suggested_y REAL NOT NULL, review TEXT, annotation_id TEXT, reliability REAL DEFAULT 1.0, delta REAL DEFAULT 0.0);
+                    CREATE TABLE warnings (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, image_name TEXT NOT NULL, keypoint TEXT NOT NULL, warning_type TEXT NOT NULL, suspicion REAL NOT NULL, human_x REAL NOT NULL, human_y REAL NOT NULL, suggested_x REAL NOT NULL, suggested_y REAL NOT NULL, review TEXT, reliability REAL DEFAULT 1.0, delta REAL DEFAULT 0.0);
                     INSERT INTO projects VALUES ('p1', 'Existing', 'hash', 1);
                 """)
                 conn.commit()
@@ -40,6 +40,8 @@ class FaceMigrationTests(unittest.TestCase):
                 self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0])
                 image_columns = {row[1] for row in conn.execute("PRAGMA table_info(images)")}
                 self.assertIn("frame_index", image_columns)
+                warning_columns = {row[1] for row in conn.execute("PRAGMA table_info(warnings)")}
+                self.assertIn("annotation_id", warning_columns)
                 self.assertIsNotNone(conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_frame_results'"
                 ).fetchone())

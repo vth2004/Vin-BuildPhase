@@ -169,6 +169,7 @@ def _violation_dict(violation: RuleViolation) -> dict[str, Any]:
 def execute_face_run(run_id: str) -> None:
     # Import optional heavy dependencies only when a Face run is requested.
     import cv2
+    import numpy as np
 
     from ..adapters.mediapipe_face import get_detector
 
@@ -201,7 +202,9 @@ def execute_face_run(run_id: str) -> None:
         image_path = (root / image["file_name"]).resolve()
         if root not in image_path.parents or not image_path.is_file():
             raise RuntimeError(f"Image not found: {image['file_name']}")
-        pixels = cv2.imread(str(image_path))
+        # ``cv2.imread`` cannot reliably open Unicode paths on Windows.  Read
+        # through Python's Unicode-aware file API then let OpenCV decode bytes.
+        pixels = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
         if pixels is None:
             raise RuntimeError(f"Cannot decode image: {image['file_name']}")
         height, width = pixels.shape[:2]

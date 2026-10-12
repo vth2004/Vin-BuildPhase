@@ -17,12 +17,46 @@ def load_schema(schema_id: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+FACE_CATEGORY_HINTS = {
+    "longmaytrai", "longmayphai", "songmui", "mattrai", "matphai", "moingoai", "moitrong",
+    "lông mày trái", "lông mày phải", "sống mũi", "mắt trái", "mắt phải", "môi ngoài", "môi trong",
+    "face", "face_landmark", "face_landmarks", "vf50", "landmark50", "face_vf50",
+}
+
+
 def validate_annotations(payload: object, schema: dict, image_names: set[str]) -> list[dict]:
     if not isinstance(payload, dict):
         raise HTTPException(400, "Annotation file is not valid JSON")
 
     # Hỗ trợ 1: Định dạng COCO Keypoints 1.0 xuất trực tiếp từ CVAT
     if "annotations" in payload and "categories" in payload and isinstance(payload.get("images"), list):
+        categories = payload.get("categories", [])
+        cat_map = {
+            c.get("id"): str(c.get("name", "")).strip().lower()
+            for c in categories
+            if isinstance(c, dict) and c.get("id") is not None
+        }
+
+        # 1. Phát hiện nếu danh mục chứa các bộ phận của Face Landmark VF50
+        face_detected = [name for name in cat_map.values() if name in FACE_CATEGORY_HINTS]
+        if face_detected:
+            raise HTTPException(
+                400,
+                f"File annotation/ZIP này chứa nhãn Face Landmark ({', '.join(face_detected)}), "
+                f"không phải Human Pose (COCO 17 điểm). Vui lòng tải lên tại phân hệ Face Landmark.",
+            )
+
+        # 2. Kiểm tra nếu có category nào chỉ định 50 keypoints của Face
+        for c in categories:
+            if isinstance(c, dict):
+                kpts_meta = c.get("keypoints", [])
+                if len(kpts_meta) == 50:
+                    raise HTTPException(
+                        400,
+                        "File annotation/ZIP này chứa cấu hình 50 điểm của Face Landmark VF50, "
+                        "không phải 17 điểm của Human Pose. Vui lòng tải lên tại phân hệ Face Landmark.",
+                    )
+
         coco_images = {img["id"]: img for img in payload["images"] if isinstance(img, dict) and "id" in img}
         annots_by_img: dict[int, list[dict]] = {}
         for annot in payload.get("annotations", []):
@@ -51,6 +85,15 @@ def validate_annotations(payload: object, schema: dict, image_names: set[str]) -
             checked_annots: list[dict] = []
             for annot in img_annots:
                 kpts = annot.get("keypoints", [])
+
+                # Kiểm tra nếu annotation chứa 150 phần tử (50 điểm * 3) -> Face VF50
+                if len(kpts) == 150:
+                    raise HTTPException(
+                        400,
+                        "Dữ liệu keypoints chứa 50 điểm (định dạng Face Landmark VF50). "
+                        "Phân hệ Human Pose chỉ hỗ trợ 17 điểm COCO toàn thân.",
+                    )
+
                 points: list[dict] = []
                 for coco_idx in range(min(17, len(kpts) // 3)):
                     x = kpts[coco_idx * 3]
@@ -87,6 +130,12 @@ def validate_annotations(payload: object, schema: dict, image_names: set[str]) -
     # Hỗ trợ 2: Định dạng landmark-qa/v1
     if payload.get("format") != "landmark-qa/v1":
         raise HTTPException(400, "Annotation JSON must be either COCO Keypoints 1.0 (from CVAT) or landmark-qa/v1")
+    if payload.get("schema_id") == "vf_face_landmark50_v1":
+        raise HTTPException(
+            400,
+            "File annotation này thuộc schema vf_face_landmark50_v1 (Face Landmark). "
+            "Vui lòng tải lên tại phân hệ Face Landmark.",
+        )
     if payload.get("schema_id") != schema["id"]:
         raise HTTPException(400, "schema_id in annotation does not match selected schema")
     records = payload.get("images")

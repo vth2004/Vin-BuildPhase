@@ -67,6 +67,7 @@ export default function HumanPosePage() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [annotationFile, setAnnotationFile] = useState<File | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
   const schemaId = 'vf_humanpose17_v1'
   const [runId, setRunId] = useState<string | null>(null)
   const [activeDatasetId, setActiveDatasetId] = useState<string | null>(null)
@@ -98,9 +99,14 @@ export default function HumanPosePage() {
   const loadProject = async () => {
     if (!session) return
     const data = await request(`/projects/${session.projectId}`)
-    setDatasets(data.datasets)
-    if (data.datasets.length > 0 && !activeDatasetId) {
-      setActiveDatasetId(data.datasets[0].id)
+    const poseDatasets = (data.datasets || []).filter(
+      (d: Dataset) => d.schema_id === schemaId || d.schema_id === 'vf_humanpose17_v1'
+    )
+    setDatasets(poseDatasets)
+    if (poseDatasets.length > 0) {
+      setActiveDatasetId(curr => (poseDatasets.some((d: Dataset) => d.id === curr) ? curr : poseDatasets[0].id))
+    } else {
+      setActiveDatasetId(null)
     }
   }
 
@@ -206,8 +212,59 @@ export default function HumanPosePage() {
     }
   }
 
+  const handleZipSelect = (f: File | null) => {
+    setFile(f)
+    setValidationError(null)
+    if (!f) return
+    const name = f.name.toLowerCase()
+    const faceTokens = ['face', 'vf50', 'landmark50', 'landmark_50', 'nguquan', 'part_nghia', 'part_tung']
+    if (faceTokens.some(t => name.includes(t))) {
+      setValidationError('⚠️ Cảnh báo: Tên tệp ZIP có dấu hiệu là dữ liệu Face Landmark (VF50). Phân hệ Human Pose chỉ nhận dữ liệu Pose toàn thân (COCO 17 điểm). Vui lòng kiểm tra lại trước khi tải lên.')
+    }
+  }
+
+  const handleAnnotationSelect = (f: File | null) => {
+    setAnnotationFile(f)
+    setValidationError(null)
+    if (!f) return
+    const name = f.name.toLowerCase()
+    if (name.endsWith('.xml')) {
+      setValidationError('⚠️ File XML là định dạng của Face Landmark (CVAT XML). Phân hệ Human Pose chỉ hỗ trợ file JSON COCO 17 điểm. Vui lòng chuyển sang phân hệ Face Landmark.')
+      return
+    }
+    if (name.includes('face') || name.includes('vf50') || name.includes('landmark50')) {
+      setValidationError('⚠️ File nhãn có tên Face Landmark (VF50). Vui lòng kiểm tra lại hoặc chuyển sang phân hệ Face Landmark.')
+      return
+    }
+    if (name.endsWith('.json')) {
+      const reader = new FileReader()
+      reader.onload = () => {
+        try {
+          const json = JSON.parse(reader.result as string)
+          if (json.schema_id === 'vf_face_landmark50_v1') {
+            setValidationError('⚠️ File nhãn này thuộc schema Face Landmark (vf_face_landmark50_v1). Vui lòng chuyển sang phân hệ Face Landmark để kiểm định.')
+          } else if (Array.isArray(json.categories)) {
+            const catNames = json.categories.map((c: any) => String(c.name || '').toLowerCase())
+            const faceHints = ['longmaytrai', 'longmayphai', 'songmui', 'mattrai', 'matphai', 'moingoai', 'moitrong', 'face', 'vf50', 'landmark50']
+            const found = catNames.filter((c: string) => faceHints.includes(c))
+            if (found.length > 0) {
+              setValidationError(`⚠️ File nhãn này chứa các danh mục Face Landmark (${found.join(', ')}). Phân hệ Human Pose chỉ nhận dữ liệu Pose toàn thân (COCO 17 điểm).`)
+            }
+          }
+        } catch {
+          // Bỏ qua lỗi cú pháp đọc nhanh
+        }
+      }
+      reader.readAsText(f)
+    }
+  }
+
   const upload = async () => {
     if (!file || !session) return
+    if (validationError && validationError.startsWith('⚠️ File')) {
+      setMessage(validationError)
+      return
+    }
     try {
       const body = new FormData()
       body.append('file', file)
@@ -218,6 +275,7 @@ export default function HumanPosePage() {
       const data = await request(`/projects/${session.projectId}/datasets`, { method: 'POST', body })
       setFile(null)
       setAnnotationFile(null)
+      setValidationError(null)
       setActiveDatasetId(data.id)
       setMessage(`Đã nhận dataset ${data.name}: ${data.image_count} ảnh theo ${data.schema_id}.`)
       loadProject()
@@ -227,13 +285,18 @@ export default function HumanPosePage() {
   }
 
   const startRun = async (datasetId: string) => {
+    const targetDataset = datasets.find(d => d.id === datasetId)
+    if (targetDataset && targetDataset.schema_id !== schemaId && targetDataset.schema_id !== 'vf_humanpose17_v1') {
+      setMessage(`Không thể chạy YOLO26s-pose trên dataset '${targetDataset.name}' vì schema là ${targetDataset.schema_id} (chỉ hỗ trợ vf_humanpose17_v1).`)
+      return
+    }
     try {
       setActiveDatasetId(datasetId)
       const data = await request(`/projects/${session!.projectId}/runs?dataset_id=${datasetId}`, { method: 'POST' })
       setRunId(data.id)
       setWarnings([])
       setSelectedWarning(null)
-      setMessage(`Đã bắt đầu chạy Run (${data.mode === 'real' ? 'Model YOLO26s-pose thật' : 'Mock'})...`)
+      setMessage(`Đã bắt đầu chạy Run (${data.mode === 'real' ? 'Model YOLO26s-pose thật' : data.mode || 'Ensemble'})...`)
     } catch (e) {
       setMessage((e as Error).message)
     }
@@ -329,31 +392,46 @@ export default function HumanPosePage() {
 
   if (!session) {
     return (
-      <main>
-        <h1>Landmark QA Web</h1>
-        <p>Hệ thống tự động phát hiện điểm nghi ngờ gán nhãn sai trên dữ liệu Landmark/Pose.</p>
-        <section>
-          <h2>Tạo dự án mới</h2>
-          <form onSubmit={createProject}>
-            <input name="name" required placeholder="Tên dự án mới" />
-            <button>Tạo project</button>
-          </form>
-        </section>
+      <main className="tool-page pose-page">
+        <header>
+          <div>
+            <h1>Khởi tạo & Quản lý Project</h1>
+            <small>Tạo dự án mới hoặc nhập mã khôi phục để tiếp tục phiên làm việc kiểm định.</small>
+          </div>
+        </header>
 
-        <section>
-          <h2>Hoặc mở lại dự án đã có</h2>
-          <form onSubmit={resumeProject}>
-            <input name="projectId" required placeholder="Project ID" />
-            <input name="recoveryKey" required placeholder="Recovery Key" />
-            <button className="btn-outline">Mở lại project</button>
-          </form>
-        </section>
+        {message && <p className="notice">{message}</p>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px', marginTop: '16px' }}>
+          <section style={{ margin: 0 }}>
+            <h2>Tạo dự án mới</h2>
+            <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)', marginTop: 0 }}>
+              Khởi tạo không gian làm việc riêng cho tập dữ liệu Pose/Landmark mới.
+            </p>
+            <form onSubmit={createProject} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <input name="name" required placeholder="Ví dụ: VinFast VF3 HumanPose QA" style={{ margin: 0, width: '100%' }} />
+              <button style={{ width: '100%' }}>Tạo project mới</button>
+            </form>
+          </section>
+
+          <section style={{ margin: 0 }}>
+            <h2>Mở lại dự án đã có</h2>
+            <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)', marginTop: 0 }}>
+              Tiếp tục phiên làm việc với Project ID và Recovery Key đã được cấp.
+            </p>
+            <form onSubmit={resumeProject} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <input name="projectId" required placeholder="Project ID (UUID)" style={{ margin: 0, width: '100%' }} />
+              <input name="recoveryKey" required placeholder="Recovery Key" style={{ margin: 0, width: '100%' }} />
+              <button className="btn-outline" style={{ width: '100%' }}>Mở lại project</button>
+            </form>
+          </section>
+        </div>
       </main>
     )
   }
 
   return (
-    <main>
+    <main className="tool-page pose-page">
       <header>
         <div>
           <h1>{session.projectName}</h1>
@@ -378,21 +456,41 @@ export default function HumanPosePage() {
       <section>
         <h2>1. Upload Dataset đã gán nhãn</h2>
         <p style={{ fontSize: '0.88rem', color: '#64748b', marginTop: 0 }}>
-          Hỗ trợ file ZIP xuất trực tiếp từ CVAT (gồm cả ảnh & nhãn), hoặc ZIP ảnh kèm file JSON nhãn riêng.
+          Hỗ trợ file ZIP xuất trực tiếp từ CVAT (gồm cả ảnh & nhãn COCO 17 điểm), hoặc ZIP ảnh kèm file JSON nhãn riêng.
         </p>
-        <p><b>Schema:</b> VinFast HumanPose-17 (COCO 17 điểm)</p>
-        <input type="file" accept=".zip,application/zip" onChange={e => setFile(e.target.files?.[0] || null)} />
-        <input type="file" accept=".json,application/json" onChange={e => setAnnotationFile(e.target.files?.[0] || null)} />
-        <button disabled={!file} onClick={upload}>
-          Tải lên dataset
-        </button>
+        <p><b>Schema bắt buộc:</b> VinFast HumanPose-17 (COCO 17 điểm toàn thân)</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>
+            <span>Tệp ZIP ảnh (hoặc ảnh + nhãn):</span>
+            <input type="file" accept=".zip,application/zip" onChange={e => handleZipSelect(e.target.files?.[0] || null)} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>
+            <span>Tệp JSON nhãn tùy chọn (COCO 1.0):</span>
+            <input type="file" accept=".json,application/json" onChange={e => handleAnnotationSelect(e.target.files?.[0] || null)} />
+          </label>
+        </div>
+
+        {validationError && (
+          <div style={{ marginTop: 12, padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, color: '#b91c1c', fontSize: '0.84rem', fontWeight: 600 }}>
+            {validationError}
+          </div>
+        )}
+
+        <div style={{ marginTop: 12 }}>
+          <button disabled={!file} onClick={upload}>
+            Tải lên dataset
+          </button>
+        </div>
       </section>
 
       {/* 2. Quản lý Dataset & Khởi chạy Run */}
       <section>
         <h2>2. Danh sách Dataset & Quét lỗi với Model AI</h2>
+        <p style={{ fontSize: '0.82rem', color: '#64748b', marginTop: 0 }}>
+          Chỉ hiển thị các dataset thuộc schema <b>VinFast HumanPose-17 (COCO 17 điểm)</b>. Các tập dữ liệu Face Landmark sẽ hiển thị ở phân hệ Face Landmark.
+        </p>
         {datasets.length === 0 ? (
-          <p style={{ color: '#64748b' }}>Chưa có dataset nào được tải lên.</p>
+          <p style={{ color: '#64748b' }}>Chưa có dataset Human Pose nào được tải lên trong project này.</p>
         ) : (
           <div className="dataset-list">
             {datasets.map(d => (

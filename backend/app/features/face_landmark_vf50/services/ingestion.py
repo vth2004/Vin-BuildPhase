@@ -92,6 +92,20 @@ def parse_face_annotations(content: bytes, image_names: set[str]) -> list[dict[s
     # A CVAT COCO export can represent one VF50 face as seven skeleton categories.
     # Merge those parts first; otherwise they become seven fake "faces" in a run.
     if isinstance(payload, dict) and isinstance(payload.get("images"), list) and isinstance(payload.get("annotations"), list):
+        categories = {
+            str(category.get("id")): str(category.get("name", "")).strip().lower()
+            for category in payload.get("categories", [])
+            if category.get("id") is not None
+        }
+        # Nếu chỉ có category person/human mà không có các bộ phận của face -> Human Pose
+        if any(name in {"person", "human", "body"} for name in categories.values()):
+            if not any(name in SKELETON_ALIASES for name in categories.values()):
+                raise HTTPException(
+                    400,
+                    "File annotation/ZIP này chứa nhãn Human Pose (COCO 17 điểm), "
+                    "không phải Face Landmark VF50 (50 điểm). Vui lòng tải lên tại phân hệ Human Pose.",
+                )
+
         if _coco_uses_separate_skeleton_annotations(payload):
             # Preserve multiple faces when the COCO producer provides an
             # instance/group identifier. Without one, the seven category parts
@@ -136,6 +150,12 @@ def parse_face_annotations(content: bytes, image_names: set[str]) -> list[dict[s
                         target["annotations"].extend(record["annotations"])
             output = list(output_by_name.values())
     elif isinstance(payload, dict) and payload.get("format") == "landmark-qa/v1":
+        if payload.get("schema_id") == "vf_humanpose17_v1":
+            raise HTTPException(
+                400,
+                "File annotation này thuộc schema Human Pose (vf_humanpose17_v1). "
+                "Vui lòng tải lên tại phân hệ Human Pose.",
+            )
         output = []
         for image in payload.get("images", []):
             name = _match_image(str(image.get("file_name", "")), image_names)

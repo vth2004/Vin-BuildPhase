@@ -17,7 +17,7 @@ from app.core.security import project_guard
 from app.features.face_landmark_vf50 import SCHEMA_ID as FACE_SCHEMA_ID
 from app.features.face_landmark_vf50.services.ingestion import parse_face_annotations
 from app.features.human_pose.services.dataset import load_schema, validate_annotations
-from app.shared.datasets import safe_extract_images
+from app.shared.datasets import safe_extract_images, validate_exif_orientation
 
 router = APIRouter(prefix="/api/projects/{project_id}/datasets", tags=["datasets"])
 
@@ -67,11 +67,19 @@ def upload_dataset(
                 for name in images
             ]
         else:
+            if raw_annotation and raw_annotation.lstrip().startswith(b"<"):
+                raise HTTPException(
+                    400,
+                    "File annotation XML này thuộc định dạng Face Landmark (CVAT XML). "
+                    "Phân hệ Human Pose chỉ hỗ trợ file JSON COCO 17 điểm. Vui lòng chuyển sang phân hệ Face Landmark.",
+                )
             try:
                 annotation_payload = json.loads(raw_annotation)
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise HTTPException(400, "Annotation file is not valid JSON") from error
             validated = validate_annotations(annotation_payload, schema, set(images))
+
+        validate_exif_orientation(location, validated)
 
         annotation_path = None
         if raw_annotation:

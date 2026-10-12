@@ -289,18 +289,33 @@ export default function FaceLandmarkPage() {
 
   if (!session) {
     return (
-      <main className="face-page">
-        <section className="face-empty">
-          <h1>Face Landmark VF50</h1>
-          <p>Face sử dụng cùng Project và Recovery key với HumanPose.</p>
-          <Link className="face-link-button" to="/">Mở hoặc tạo project ở HumanPose</Link>
+      <main className="tool-page face-page">
+        <header>
+          <div>
+            <h1>Face Landmark VF50</h1>
+            <small>Chưa kết nối dự án kiểm định.</small>
+          </div>
+        </header>
+
+        <section className="face-empty" style={{ margin: '40px auto' }}>
+          <div style={{ width: 56, height: 56, margin: '0 auto 16px', borderRadius: '12px', background: 'var(--blue-subtle)', color: 'var(--blue-primary)', display: 'grid', placeItems: 'center' }}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+          </div>
+          <h2 style={{ fontSize: '1.3rem', margin: '0 0 8px' }}>Chưa có phiên làm việc Project</h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '440px', margin: '0 auto 20px' }}>
+            Face Landmark dùng chung Project và Recovery key với Human Pose. Vui lòng mở hoặc tạo project để tiếp tục.
+          </p>
+          <Link className="face-link-button" to="/pose">Mở hoặc tạo project ở Human Pose →</Link>
         </section>
       </main>
     )
   }
 
   return (
-    <main className="face-page">
+    <main className="tool-page face-page">
       <header>
         <div>
           <h1>Face Landmark VF50</h1>

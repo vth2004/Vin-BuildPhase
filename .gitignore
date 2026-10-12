@@ -1,7 +1,6 @@
 # ============ Secrets & Env (QUAN TRỌNG) ============
 .env
 .env.*
-!.env.example
 **/.env
 **/.env.*
 *.pem
@@ -17,6 +16,14 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pyre/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.ipynb_checkpoints/
 
 # ============ Virtual envs ============
 .venv/
@@ -33,6 +40,12 @@ backend/data/
 *.db-journal
 *.db-shm
 *.db-wal
+backend/instance/
+backend/uploads/
+backend/tmp/
+# Dataset/annotation package kept locally for manual testing.
+part_tung/
+part_nghia/
 
 # ============ Models & datasets lớn (KHÔNG push lên GitHub) ============
 *.pt
@@ -52,6 +65,12 @@ frontend/dist/
 dist/
 build/
 .vite/
+.turbo/
+.eslintcache
+coverage/
+test-results/
+playwright-report/
+allure-results/
 *.local
 *.tsbuildinfo
 vite.config.d.ts
@@ -79,4 +98,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+.roundtrip-sandbox/
+*.tmp
+*.temp
 experiments/face_baseline/
