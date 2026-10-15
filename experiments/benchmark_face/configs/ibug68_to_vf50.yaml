@@ -1,0 +1,69 @@
+dataset_family: ibug68
+source_point_count: 68
+source_index_base: 0
+coordinate_origin: dataset_specific
+left_right_convention: image_view
+state_policy:
+  default: visible
+  cofw68_visibility: verify_from_mat
+  merl_rav_positive: visible
+  merl_rav_negative: occluded
+  merl_rav_minus_one: outside
+groups:
+  - name: longmaytrai
+    vf_ids: [0, 1, 2, 3, 4]
+    method: direct
+    source_ids: [17, 18, 19, 20, 21]
+  - name: longmayphai
+    vf_ids: [5, 6, 7, 8, 9]
+    method: direct
+    source_ids: [22, 23, 24, 25, 26]
+  - name: songmui
+    vf_ids: [10, 11, 12, 13]
+    method: direct
+    source_ids: [27, 28, 29, 30]
+  - name: mattrai
+    vf_ids: [14, 15, 16, 17, 18]
+    method: resample
+    source_ids: [36, 37, 38, 39]
+    fractions: [0.0, 0.25, 0.5, 0.75, 1.0]
+    anchors: [14, 18]
+  - name: mattrai
+    vf_ids: [19, 20, 21]
+    method: resample
+    source_ids: [39, 40, 41, 36]
+    fractions: [0.25, 0.5, 0.75]
+    anchors: []
+  - name: matphai
+    vf_ids: [22, 23, 24, 25, 26]
+    method: resample
+    source_ids: [42, 43, 44, 45]
+    fractions: [0.0, 0.25, 0.5, 0.75, 1.0]
+    anchors: [22, 26]
+  - name: matphai
+    vf_ids: [27, 28, 29]
+    method: resample
+    source_ids: [45, 46, 47, 42]
+    fractions: [0.25, 0.5, 0.75]
+    anchors: []
+  - name: moingoai
+    vf_ids: [30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41]
+    method: direct
+    source_ids: [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59]
+  - name: moitrong
+    vf_ids: [42, 43, 44, 45, 46, 47, 48, 49]
+    method: direct
+    source_ids: [60, 61, 62, 63, 64, 65, 66, 67]
+anchors:
+  0: 17
+  4: 21
+  5: 22
+  9: 26
+  10: 27
+  13: 30
+  14: 36
+  18: 39
+  22: 42
+  26: 45
+  30: 48
+  36: 54

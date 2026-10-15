@@ -1,0 +1,35 @@
+benchmark_only: true
+do_not_apply_automatically: true
+decision_note: >-
+  Chỉ R12 là đề xuất thử nghiệm. Giữ nguyên scoring vì clean GT trùng model
+  reference; R08/R09 cần lỗi nhẹ và lỗi người thật trước khi đề xuất.
+recommended:
+  rules:
+    r12_coincident_points:
+      iod_ratio_multiplier: 0.006
+keep_current:
+  scoring_tolerances:
+    anchor_point_iod_ratio: 0.03
+    contour_point_iod_ratio: 0.05
+    nme_max_threshold: 0.035
+    severity_critical_multiplier: 1.8
+    suspicion_normalizer_multiplier: 2.5
+  rules:
+    r04_eyebrow_monotonic: {scale_factor_multiplier: 5.0}
+    r06_eyelid_tilt: {scale_factor_multiplier: 2.0}
+    r08_nose_bridge: {max_ratio: 1.55}
+    r09_inner_lip: {contour_tolerance_multiplier: 2.0}
+    r13_temporal_jump: {scale_factor_multiplier: 15.0}
+    r14_occluded_drift: {max_drift_iod_ratio: 0.15}
+dev_selected_candidates_not_recommended:
+  scoring_tolerances:
+    anchor_point_iod_ratio: 0.015
+    contour_point_iod_ratio: 0.02
+    nme_max_threshold: 0.015
+    severity_critical_multiplier: 1.2
+    suspicion_normalizer_multiplier: 1.5
+  rules:
+    r08_nose_bridge: {max_ratio: 2.5}
+    r09_inner_lip:
+      per_point_tolerance_px: 3.0
+      warning: Runtime đọc key này, còn contour_tolerance_multiplier trong YAML bị bỏ qua.

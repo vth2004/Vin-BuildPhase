@@ -1,0 +1,50 @@
+dataset_family: wflw98
+source_point_count: 98
+source_index_base: 0
+coordinate_origin: zero_based
+left_right_convention: image_view
+state_policy:
+  default: visible
+  invalid_coordinate: outside
+groups:
+  - name: longmaytrai
+    vf_ids: [0, 1, 2, 3, 4]
+    method: direct
+    source_ids: [33, 34, 35, 36, 37]
+  - name: longmayphai
+    vf_ids: [5, 6, 7, 8, 9]
+    method: direct
+    source_ids: [42, 43, 44, 45, 46]
+  - name: songmui
+    vf_ids: [10, 11, 12, 13]
+    method: direct
+    source_ids: [51, 52, 53, 54]
+  - name: mattrai
+    vf_ids: [14, 15, 16, 17, 18, 19, 20, 21]
+    method: direct
+    source_ids: [60, 61, 62, 63, 64, 65, 66, 67]
+  - name: matphai
+    vf_ids: [22, 23, 24, 25, 26, 27, 28, 29]
+    method: direct
+    source_ids: [68, 69, 70, 71, 72, 73, 74, 75]
+  - name: moingoai
+    vf_ids: [30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41]
+    method: direct
+    source_ids: [76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87]
+  - name: moitrong
+    vf_ids: [42, 43, 44, 45, 46, 47, 48, 49]
+    method: direct
+    source_ids: [88, 89, 90, 91, 92, 93, 94, 95]
+anchors:
+  0: 33
+  4: 37
+  5: 42
+  9: 46
+  10: 51
+  13: 54
+  14: 60
+  18: 64
+  22: 68
+  26: 72
+  30: 76
+  36: 82
