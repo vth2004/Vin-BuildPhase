@@ -5,6 +5,7 @@ import type { Dataset, FaceResultDetail, FaceResultSummary, FaceRun, Point, Sess
 import { RULE_CODES, VF50_EDGES, VF50_GROUPS } from './vf50'
 import TemporalPanel from '../temporal/TemporalPanel'
 import TemporalRunOptions from '../temporal/TemporalRunOptions'
+import VideoImportPanel from '../video/VideoImportPanel'
 import './face.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
@@ -347,15 +348,23 @@ export default function FaceLandmarkPage() {
             <label>Sequence manifest tùy chọn<input type="file" accept=".json" onChange={event => setManifestFile(event.target.files?.[0] || null)} /></label>
             <button disabled={!zipFile || busy}>Upload Face dataset</button>
           </form>
+          <VideoImportPanel
+            session={session}
+            schemaId="vf_face_landmark50_v1"
+            annotationAccept=".xml,.json,application/xml,application/json"
+            existingDatasetId={datasets.find(item => item.status !== 'ready')?.id}
+            onMessage={setMessage}
+            onReady={async readyDatasetId => { await loadProject(); setDatasetId(readyDatasetId) }}
+          />
         </div>
         <div>
           <h2>2. Chạy kiểm định</h2>
           <select value={datasetId} onChange={event => setDatasetId(event.target.value)}>
             <option value="">Chọn Face dataset</option>
-            {datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name} ({dataset.image_count} ảnh)</option>)}
+            {datasets.map(dataset => <option key={dataset.id} value={dataset.id} disabled={dataset.status !== 'ready'}>{dataset.name} ({dataset.image_count} ảnh{dataset.status !== 'ready' ? ` · ${dataset.status}` : ''})</option>)}
           </select>
-          {datasetId && <TemporalRunOptions session={session} datasetId={datasetId} enabled={temporalEnabled} windowSize={temporalWindow} onEnabled={setTemporalEnabled} onWindow={setTemporalWindow} />}
-          <button disabled={!datasetId || busy} onClick={startRun}>Chạy MediaPipe + 14 luật</button>
+          {datasetId && datasets.find(item => item.id === datasetId)?.status === 'ready' && <TemporalRunOptions session={session} datasetId={datasetId} enabled={temporalEnabled} windowSize={temporalWindow} onEnabled={setTemporalEnabled} onWindow={setTemporalWindow} />}
+          <button disabled={!datasetId || busy || datasets.find(item => item.id === datasetId)?.status !== 'ready'} onClick={startRun}>Chạy MediaPipe + 14 luật</button>
           {runs.length > 0 && (
             <div className="face-run-history">
               <span>Run gần đây:</span>

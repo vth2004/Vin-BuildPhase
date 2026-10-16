@@ -1,7 +1,7 @@
 # Kế hoạch bổ sung Temporal QA/QC cho Pose và Face (bản rút gọn v3)
 
 - **Nhánh triển khai:** `dev/hiep-temporal-qa`
-- **Trạng thái:** Phase 7D hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
+- **Trạng thái:** Phase 7 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
 - **Phạm vi:** Human Pose 17 điểm và Face Landmark VF50.
 
 ## 1. Mục tiêu và phạm vi
@@ -380,7 +380,8 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 - **7B hoàn thành ngày 2026-10-16:** endpoint video nhận thêm `annotation_file` tùy chọn. Pose dùng các JSON hiện có; Face dùng XML/JSON hiện có. Mọi record annotation phải có original frame index rõ ràng (`frame_index`, `original_frame_index`, `frame`, CVAT video `@frame` hoặc CVAT image `@id`); backend ánh xạ index đó sang frame decode và không suy đoán từ tên file. Source annotation được giữ nguyên, instance/track metadata được bảo toàn khi parser cung cấp; index thiếu, trùng hoặc vượt phạm vi làm import thất bại và cleanup toàn bộ dataset.
 - **7C hoàn thành ngày 2026-10-16:** upload tạo dataset `processing` và `video_import_jobs`, trả `202`, sau đó decode bằng background task. Frame đi vào staging riêng theo attempt và chỉ được publish sang `images/` sau khi decode, annotation validation và quota đều thành công. Áp quota mặc định 10.000 frame và 5 GB dữ liệu pixel sau giải mã (có thể cấu hình bằng environment); lỗi codec, quota hoặc annotation đánh dấu dataset/job `failed`, lưu thông báo lỗi và cleanup staging. API `GET /datasets/{id}/import` trả trạng thái/progress/error; không cho tạo QA run khi dataset chưa `ready`.
 - **7D hoàn thành ngày 2026-10-16:** startup chuyển job `pending`/`processing` còn sót sang `interrupted`, cleanup staging và không tự coi dataset là ready. API `POST /datasets/{id}/import/retry` chỉ nhận dataset `failed`/`interrupted`, giữ source video/annotation, tạo attempt mới có audit riêng và chạy lại từ đầu; chưa resume giữa chừng đúng như phạm vi đã chốt.
-- Upload, staging/decode nền, import job/quota/interruption/retry.
+- **7E hoàn thành ngày 2026-10-16:** UI Pose và Face có khu upload MP4/MOV/AVI, annotation tùy chọn theo schema, trạng thái thử nghiệm, progress theo import job, thông báo lỗi và nút retry. Dataset chưa `ready` bị khóa cấu hình/run. Khi tải lại trang, UI tự nối lại job video chưa hoàn tất gần nhất của từng schema; khi job `ready`, danh sách dataset được refresh và dataset mới được chọn để cấu hình temporal/run.
+- Upload, staging/decode nền, import job/quota/interruption/retry và UI Pose/Face.
 - **Test:** video hỏng; quá quota; lỗi giữa import; restart; rotation; codec lỗi; frame mapping; staging cleanup.
 - **Hoàn thành:** lỗi không tạo dataset `ready`; restart không để job treo; map đúng frame.
 

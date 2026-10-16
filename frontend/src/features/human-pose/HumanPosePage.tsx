@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import TemporalPanel from '../temporal/TemporalPanel'
 import TemporalRunOptions from '../temporal/TemporalRunOptions'
+import VideoImportPanel from '../video/VideoImportPanel'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
 
@@ -494,6 +495,14 @@ export default function HumanPosePage() {
             Tải lên dataset
           </button>
         </div>
+        <VideoImportPanel
+          session={session}
+          schemaId="vf_humanpose17_v1"
+          annotationAccept=".json,application/json"
+          existingDatasetId={datasets.find(item => item.status !== 'ready')?.id}
+          onMessage={setMessage}
+          onReady={async datasetId => { await loadProject(); setActiveDatasetId(datasetId) }}
+        />
       </section>
 
       {/* 2. Quản lý Dataset & Khởi chạy Run */}
@@ -510,16 +519,17 @@ export default function HumanPosePage() {
               <div className="dataset-item" key={d.id}>
                 <span>
                   <strong>{d.name}</strong> · {d.image_count} ảnh · Schema: <code>{d.schema_id}</code>
+                  {d.status !== 'ready' && <> · <b>{d.status}</b></>}
                 </span>
-                <button className="btn-outline" onClick={() => setActiveDatasetId(d.id)}>Cấu hình</button>
-                <button onClick={() => startRun(d.id)}>
+                <button className="btn-outline" disabled={d.status !== 'ready'} onClick={() => setActiveDatasetId(d.id)}>Cấu hình</button>
+                <button disabled={d.status !== 'ready'} onClick={() => startRun(d.id)}>
                   Chạy quét lỗi (YOLO26s-pose)
                 </button>
               </div>
             ))}
           </div>
         )}
-        {activeDatasetId && <TemporalRunOptions session={session} datasetId={activeDatasetId} enabled={temporalEnabled} windowSize={temporalWindow} onEnabled={setTemporalEnabled} onWindow={setTemporalWindow} />}
+        {activeDatasetId && datasets.find(d => d.id === activeDatasetId)?.status === 'ready' && <TemporalRunOptions session={session} datasetId={activeDatasetId} enabled={temporalEnabled} windowSize={temporalWindow} onEnabled={setTemporalEnabled} onWindow={setTemporalWindow} />}
       </section>
 
       {/* 3. Review trực quan: Bộ lọc + Danh sách cảnh báo + Canvas Skeleton */}

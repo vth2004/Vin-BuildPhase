@@ -35,7 +35,7 @@ Khoảng trống được tính theo `frame_index` gốc hoặc timestamp tin c�
 
 ## Giới hạn hiện tại
 
-- Backend Phase 7D đã nhận video qua `POST /api/projects/{project_id}/datasets/video` với multipart `file`, `schema_id` và `annotation_file` tùy chọn. Endpoint trả `202`; theo dõi job tại `GET /datasets/{dataset_id}/import`. Annotation Pose JSON hoặc Face XML/JSON phải chỉ rõ original frame index. Decode chạy nền với quota mặc định 10.000 frame/5 GB, publish qua staging; job lỗi hoặc gián đoạn có thể chạy lại bằng `POST /datasets/{dataset_id}/import/retry`. UI upload video thuộc 7E.
+- Phase 7 đã hoàn thành. Trên trang Pose hoặc Face, khu **Upload video** nhận MP4/MOV/AVI và annotation tùy chọn, hiển thị progress/lỗi và cho **Thử lại** khi job `failed` hoặc `interrupted`. Backend trả `202`; có thể theo dõi trực tiếp tại `GET /datasets/{dataset_id}/import`. Annotation Pose JSON hoặc Face XML/JSON phải chỉ rõ original frame index. Decode chạy nền với quota mặc định 10.000 frame/5 GB và chỉ publish frame từ staging khi toàn bộ import thành công.
 
 - Ngưỡng scene cut, gap và temporal quality chưa được benchmark/hiệu chỉnh; không diễn giải quality như xác suất.
 - Pose ngắt track khi mất primary detection để tránh ID switch; coverage có thể giảm ở che khuất nặng.
