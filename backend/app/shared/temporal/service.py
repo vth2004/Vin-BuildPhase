@@ -115,6 +115,7 @@ def process_temporal_run(run_id: str, feature: str, point_ids: list[int],
                 inserts.append((result_id, run_id, row["sequence_id"], row["segment_id"], row["internal_track_id"],
                                 row["image_id"], row["matched_annotation_id"], frame.frame_index, point_id,
                                 raw.get("x") if raw else None, raw.get("y") if raw else None,
+                                human.get("x") if human else None, human.get("y") if human else None,
                                 estimate.coordinate[0] if estimate.coordinate else None,
                                 estimate.coordinate[1] if estimate.coordinate else None,
                                 estimate.estimate_status, estimate.method, estimate.unavailable_reason,
@@ -131,11 +132,11 @@ def process_temporal_run(run_id: str, feature: str, point_ids: list[int],
             conn.executemany(
                 """INSERT INTO temporal_results (
                      id, run_id, sequence_id, segment_id, internal_track_id, image_id, annotation_id, frame_index,
-                     keypoint_id, raw_x, raw_y, temporal_x, temporal_y, estimate_status, method, unavailable_reason,
+                     keypoint_id, raw_x, raw_y, human_x, human_y, temporal_x, temporal_y, estimate_status, method, unavailable_reason,
                      temporal_quality, temporal_score, support_count, residual, gap_frames, gap_us,
                      normalization_source, time_source, evidence, observation_source, supporting_model_count,
                      trajectory_json, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 inserts,
             )
             for warning in warnings:

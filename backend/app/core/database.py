@@ -205,6 +205,7 @@ def init_db() -> None:
           segment_id INTEGER NOT NULL, internal_track_id TEXT NOT NULL,
           image_id TEXT NOT NULL, annotation_id TEXT, frame_index INTEGER NOT NULL,
           keypoint_id INTEGER NOT NULL, raw_x REAL, raw_y REAL,
+          human_x REAL, human_y REAL,
           temporal_x REAL, temporal_y REAL, estimate_status TEXT NOT NULL,
           method TEXT NOT NULL, unavailable_reason TEXT, temporal_quality REAL NOT NULL,
           temporal_score REAL, support_count INTEGER NOT NULL, residual REAL,
@@ -220,6 +221,11 @@ def init_db() -> None:
         """)
         if "raw_keypoints_json" not in _column_names(conn, "temporal_observations"):
             conn.execute("ALTER TABLE temporal_observations ADD COLUMN raw_keypoints_json TEXT")
+        temporal_result_columns = _column_names(conn, "temporal_results")
+        if "human_x" not in temporal_result_columns:
+            conn.execute("ALTER TABLE temporal_results ADD COLUMN human_x REAL")
+        if "human_y" not in temporal_result_columns:
+            conn.execute("ALTER TABLE temporal_results ADD COLUMN human_y REAL")
 
         conn.execute("""
           UPDATE images

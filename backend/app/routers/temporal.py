@@ -68,6 +68,17 @@ def temporal_result_detail(project_id: str, run_id: str, result_id: str,
         raise HTTPException(404, "Temporal result not found")
     result = dict(row)
     result["trajectory"] = json.loads(result.pop("trajectory_json") or "[]")
+    if result["sequence_id"] and result["trajectory"]:
+        frame_numbers = [item["frame_index"] for item in result["trajectory"]]
+        placeholders = ",".join("?" for _ in frame_numbers)
+        with db() as conn:
+            names = conn.execute(
+                f"SELECT original_frame_index, file_name FROM images WHERE sequence_id = ? AND original_frame_index IN ({placeholders})",
+                [result["sequence_id"], *frame_numbers],
+            ).fetchall()
+        by_frame = {item["original_frame_index"]: item["file_name"] for item in names}
+        for item in result["trajectory"]:
+            item["file_name"] = by_frame.get(item["frame_index"])
     return result
 
 

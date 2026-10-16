@@ -9,6 +9,8 @@ export type FaceRun = {
   mode: string
   error_message?: string
   created_at: number
+  temporal_enabled?: boolean
+  temporal_window_size?: number
 }
 export type Point = {
   id: number

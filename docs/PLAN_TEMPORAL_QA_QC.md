@@ -1,7 +1,7 @@
 # Kế hoạch bổ sung Temporal QA/QC cho Pose và Face (bản rút gọn v3)
 
 - **Nhánh triển khai:** `dev/hiep-temporal-qa`
-- **Trạng thái:** Phase 4 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
+- **Trạng thái:** Phase 5 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
 - **Phạm vi:** Human Pose 17 điểm và Face Landmark VF50.
 
 ## 1. Mục tiêu và phạm vi
@@ -358,6 +358,7 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 
 ### Phase 5 — UI chỉ đọc (M/L) · Mốc demo 1
 
+- **Trạng thái: hoàn thành ngày 2026-10-16.** Pose/Face có sequence summary và confirmation, upload manifest rời, toggle/window, summary/filter, overlay Human/Model/Temporal, trajectory, timeline thumbnail và navigation. Có [quickstart](TEMPORAL_QA_QUICKSTART.md); panel chỉ đọc, không thay đổi QA/QC cũ hay annotation nguồn.
 - Chọn chế độ có nhãn/chưa nhãn, upload annotation rời, thẻ sequence summary, thumbnail đầu/cuối/quanh gap, ô FPS và xác nhận sampling đều; trường hợp mơ hồ yêu cầu manifest; toggle, window, overlay, trajectory, timeline, navigation, track/quality/source/reason và summary.
 - README ngắn về chạy, input, manifest, config và giới hạn; frontend build.
 - **Hoàn thành:** demo thả ZIP → xác nhận → temporal run → warning/trajectory → reason.
