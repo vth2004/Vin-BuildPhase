@@ -1,7 +1,7 @@
 # Kế hoạch bổ sung Temporal QA/QC cho Pose và Face (bản rút gọn v3)
 
 - **Nhánh triển khai:** `dev/hiep-temporal-qa`
-- **Trạng thái:** Phase 7A hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
+- **Trạng thái:** Phase 7B hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
 - **Phạm vi:** Human Pose 17 điểm và Face Landmark VF50.
 
 ## 1. Mục tiêu và phạm vi
@@ -377,6 +377,7 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 ### Phase 7 — Upload video (L) · Mốc demo 3
 
 - **7A hoàn thành ngày 2026-10-16:** endpoint backend `POST /datasets/video` nhận MP4/MOV/AVI tối đa 500 MB, lưu video gốc và decode tuần tự bằng OpenCV. Mỗi video tạo một sequence đã xác nhận; frame giữ kích thước, original index từ 0, timestamp ưu tiên metadata và fallback FPS. Migration `007_video_ingestion` lưu codec, FPS, kích thước, số frame và rotation. Video hỏng/codec không đọc được/frame đổi kích thước bị từ chối và cleanup, không tạo dataset `ready`. Annotation video thuộc 7B; job nền/quota decoded thuộc 7C.
+- **7B hoàn thành ngày 2026-10-16:** endpoint video nhận thêm `annotation_file` tùy chọn. Pose dùng các JSON hiện có; Face dùng XML/JSON hiện có. Mọi record annotation phải có original frame index rõ ràng (`frame_index`, `original_frame_index`, `frame`, CVAT video `@frame` hoặc CVAT image `@id`); backend ánh xạ index đó sang frame decode và không suy đoán từ tên file. Source annotation được giữ nguyên, instance/track metadata được bảo toàn khi parser cung cấp; index thiếu, trùng hoặc vượt phạm vi làm import thất bại và cleanup toàn bộ dataset.
 - Upload, staging/decode nền, import job/quota/interruption/retry.
 - **Test:** video hỏng; quá quota; lỗi giữa import; restart; rotation; codec lỗi; frame mapping; staging cleanup.
 - **Hoàn thành:** lỗi không tạo dataset `ready`; restart không để job treo; map đúng frame.

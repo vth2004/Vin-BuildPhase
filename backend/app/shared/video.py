@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import json
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +35,80 @@ class VideoDecodeResult:
 
 class VideoDecodeError(ValueError):
     pass
+
+
+class VideoAnnotationError(ValueError):
+    pass
+
+
+def prepare_video_annotation(content: bytes, frame_count: int) -> bytes:
+    """Map supported annotations to decoded names using explicit source frame indices.
+
+    Video imports deliberately never infer a frame from an annotation filename. JSON
+    records must carry ``frame_index``, ``original_frame_index`` or ``frame``. CVAT
+    XML uses the video ``track/*@frame`` value or the image element ``@id``.
+    """
+    stripped = content.lstrip()
+    if stripped.startswith(b"<"):
+        try:
+            root = ET.fromstring(content)
+        except ET.ParseError as error:
+            raise VideoAnnotationError("Annotation XML is invalid") from error
+        found = False
+        for image in root.findall(".//image"):
+            raw_index = image.get("id")
+            index = _video_frame_index(raw_index, frame_count)
+            image.set("name", f"frame_{index:06d}.jpg")
+            found = True
+        for element in root.findall(".//*[@frame]"):
+            _video_frame_index(element.get("frame"), frame_count)
+            found = True
+        if not found:
+            raise VideoAnnotationError("Video annotation XML has no explicit frame indices")
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    try:
+        payload = json.loads(content.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise VideoAnnotationError("Annotation file is not valid JSON or XML") from error
+    if not isinstance(payload, dict):
+        raise VideoAnnotationError("Annotation JSON must be an object")
+
+    records = payload.get("images")
+    if not isinstance(records, list):
+        records = payload.get("frames")
+    if not isinstance(records, list) or not records:
+        raise VideoAnnotationError("Video annotation JSON requires a non-empty images or frames array")
+    seen: set[int] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise VideoAnnotationError("Each video annotation frame must be an object")
+        raw_index = next((record.get(key) for key in ("frame_index", "original_frame_index", "frame")
+                          if record.get(key) is not None), None)
+        index = _video_frame_index(raw_index, frame_count)
+        if index in seen:
+            raise VideoAnnotationError(f"Duplicate video annotation frame index: {index}")
+        seen.add(index)
+        record["file_name"] = f"frame_{index:06d}.jpg"
+        if "image_filename" in record:
+            record["image_filename"] = record["file_name"]
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+def _video_frame_index(raw: object, frame_count: int) -> int:
+    if isinstance(raw, bool):
+        raise VideoAnnotationError("Video annotation frame index must be an integer")
+    try:
+        index = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError) as error:
+        raise VideoAnnotationError("Video annotation requires an explicit integer frame index") from error
+    if str(raw).strip() != str(index):
+        raise VideoAnnotationError("Video annotation frame index must be an integer")
+    if index < 0 or index >= frame_count:
+        raise VideoAnnotationError(
+            f"Video annotation frame index {index} is outside decoded range 0..{frame_count - 1}"
+        )
+    return index
 
 
 def _finite_positive(value: float, maximum: float = 1000.0) -> bool:

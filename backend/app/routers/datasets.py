@@ -20,7 +20,10 @@ from app.features.face_landmark_vf50.services.ingestion import parse_face_annota
 from app.features.human_pose.services.dataset import load_schema, validate_annotations
 from app.shared.datasets import safe_extract_dataset, validate_exif_orientation
 from app.shared.temporal import infer_sequences, parse_sequence_manifest
-from app.shared.video import VIDEO_EXTENSIONS, VideoDecodeError, decode_video
+from app.shared.video import (
+    VIDEO_EXTENSIONS, VideoAnnotationError, VideoDecodeError, decode_video,
+    prepare_video_annotation,
+)
 
 router = APIRouter(prefix="/api/projects/{project_id}/datasets", tags=["datasets"])
 
@@ -232,6 +235,9 @@ def upload_video_dataset(
     project_id: str,
     file: Annotated[UploadFile, File(description="MP4, MOV or AVI video")],
     schema_id: Annotated[str, Form()],
+    annotation_file: Annotated[UploadFile | None, File(
+        description="Optional CVAT XML, COCO JSON, landmark-qa/v1 or cleaned JSON mapped by original frame index"
+    )] = None,
     _: sqlite3.Row = Depends(project_guard),
 ) -> dict:
     suffix = Path(file.filename or "").suffix.lower()
@@ -261,6 +267,36 @@ def upload_video_dataset(
         except VideoDecodeError as error:
             raise HTTPException(400, str(error)) from error
 
+        raw_annotation = None
+        validated: list[dict] = []
+        if annotation_file and annotation_file.filename:
+            raw_annotation = annotation_file.file.read(MAX_UPLOAD_BYTES + 1)
+            if len(raw_annotation) > MAX_UPLOAD_BYTES:
+                raise HTTPException(413, "Annotation file exceeds 500 MB limit")
+            if not raw_annotation:
+                raise HTTPException(400, "Annotation file is empty")
+            try:
+                normalized_annotation = prepare_video_annotation(raw_annotation, len(decoded.frames))
+            except VideoAnnotationError as error:
+                raise HTTPException(400, str(error)) from error
+            image_names = {frame.file_name for frame in decoded.frames}
+            if schema_id == FACE_SCHEMA_ID:
+                validated = parse_face_annotations(normalized_annotation, image_names)
+            else:
+                if normalized_annotation.lstrip().startswith(b"<"):
+                    raise HTTPException(400, "Human Pose video annotations must use a supported JSON format")
+                try:
+                    annotation_payload = json.loads(normalized_annotation)
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise HTTPException(400, "Annotation file is not valid JSON") from error
+                validated = validate_annotations(annotation_payload, load_schema(schema_id), image_names)
+
+        annotation_path = None
+        if raw_annotation:
+            suffix_annotation = ".xml" if raw_annotation.lstrip().startswith(b"<") else ".json"
+            annotation_path = dataset_root / f"source_annotation{suffix_annotation}"
+            annotation_path.write_bytes(raw_annotation)
+
         now = int(time.time())
         sequence_id = str(uuid.uuid4())
         mapping = [{"file_name": frame.file_name, "frame_index": frame.frame_index,
@@ -274,10 +310,10 @@ def upload_video_dataset(
         with db() as conn:
             conn.execute(
                 """INSERT INTO datasets
-                     (id, project_id, name, status, image_count, storage_path, schema_id, created_at)
-                   VALUES (?, ?, ?, 'ready', ?, ?, ?, ?)""",
+                     (id, project_id, name, status, image_count, storage_path, schema_id, annotation_path, created_at)
+                   VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?)""",
                 (dataset_id, project_id, Path(file.filename or "video").stem, len(decoded.frames),
-                 str(images_root), schema_id, now),
+                 str(images_root), schema_id, str(annotation_path) if annotation_path else None, now),
             )
             conn.execute(
                 """INSERT INTO sequences (
@@ -292,20 +328,32 @@ def upload_video_dataset(
                  json.dumps(snapshot, ensure_ascii=False), str(media_path), decoded.codec,
                  decoded.width, decoded.height, len(decoded.frames), decoded.rotation_degrees, now),
             )
+            records_by_name = {record["file_name"]: record for record in validated}
             for frame in decoded.frames:
+                image_id = str(uuid.uuid4())
                 conn.execute(
                     """INSERT INTO images (
                          id, dataset_id, file_name, width, height, frame_index, sequence_id,
                          original_frame_index, timestamp_us, timestamp_source, frame_index_source
                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'video_decode')""",
-                    (str(uuid.uuid4()), dataset_id, frame.file_name, frame.width, frame.height,
+                    (image_id, dataset_id, frame.file_name, frame.width, frame.height,
                      frame.frame_index, sequence_id, frame.frame_index, frame.timestamp_us,
                      frame.timestamp_source),
                 )
+                for annotation in records_by_name.get(frame.file_name, {}).get("annotations", []):
+                    conn.execute(
+                        """INSERT INTO annotations (
+                             id, image_id, label, keypoints_json, source_instance_id, source_track_id
+                           ) VALUES (?, ?, ?, ?, ?, ?)""",
+                        (str(uuid.uuid4()), image_id, annotation["label"],
+                         json.dumps(annotation["keypoints"]), annotation.get("source_instance_id"),
+                         annotation.get("source_track_id")),
+                    )
             summary = _sequence_summary(conn, dataset_id)
         return {
             "id": dataset_id, "name": Path(file.filename or "video").stem, "status": "ready",
             "image_count": len(decoded.frames), "schema_id": schema_id,
+            "annotation_count": sum(len(record.get("annotations", [])) for record in validated),
             "sequence_summary": summary,
         }
     except Exception:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -110,6 +111,92 @@ class VideoIngestionApiTests(unittest.TestCase):
         self.assertEqual(400, unsupported.status_code)
         with database.db() as conn:
             self.assertEqual(0, conn.execute("SELECT COUNT(*) FROM datasets WHERE project_id = ?", (self.project_id,)).fetchone()[0])
+
+    def test_pose_annotation_maps_by_explicit_original_frame_index(self) -> None:
+        points = [
+            {"id": point_id, "name": str(point_id), "x": float(point_id), "y": float(point_id + 1), "state": "visible"}
+            for point_id in range(1, 18)
+        ]
+        annotation = {
+            "format": "landmark-qa/v1", "schema_id": "vf_humanpose17_v1",
+            "images": [{
+                "file_name": "must-not-be-used.jpg", "frame_index": 2,
+                "annotations": [{"id": "person-7", "track_id": "track-3", "keypoints": points}],
+            }],
+        }
+        response = self.client.post(
+            f"/api/projects/{self.project_id}/datasets/video", headers=self.headers,
+            data={"schema_id": "vf_humanpose17_v1"},
+            files={
+                "file": ("walk.avi", small_avi(self.root), "video/x-msvideo"),
+                "annotation_file": ("pose.json", json.dumps(annotation).encode(), "application/json"),
+            },
+        )
+        self.assertEqual(201, response.status_code, response.text)
+        payload = response.json()
+        self.assertEqual(1, payload["annotation_count"])
+        with database.db() as conn:
+            row = conn.execute(
+                """SELECT i.original_frame_index, a.source_instance_id, a.source_track_id
+                     FROM annotations a JOIN images i ON i.id = a.image_id
+                    WHERE i.dataset_id = ?""", (payload["id"],),
+            ).fetchone()
+            annotation_path = conn.execute(
+                "SELECT annotation_path FROM datasets WHERE id = ?", (payload["id"],),
+            ).fetchone()[0]
+        self.assertEqual([2, "person-7", "track-3"], list(row))
+        self.assertEqual("must-not-be-used.jpg", json.loads(Path(annotation_path).read_text())["images"][0]["file_name"])
+
+    def test_face_annotation_maps_by_explicit_original_frame_index(self) -> None:
+        points = [
+            {"id": point_id, "x": float(point_id), "y": float(point_id + 1), "state": "visible"}
+            for point_id in range(50)
+        ]
+        annotation = {
+            "format": "landmark-qa/v1", "schema_id": "vf_face_landmark50_v1",
+            "images": [{
+                "file_name": "unrelated.png", "original_frame_index": 1,
+                "annotations": [{"id": "face-1", "track_id": "face-track", "keypoints": points}],
+            }],
+        }
+        response = self.client.post(
+            f"/api/projects/{self.project_id}/datasets/video", headers=self.headers,
+            data={"schema_id": "vf_face_landmark50_v1"},
+            files={
+                "file": ("face.avi", small_avi(self.root), "video/x-msvideo"),
+                "annotation_file": ("face.json", json.dumps(annotation).encode(), "application/json"),
+            },
+        )
+        self.assertEqual(201, response.status_code, response.text)
+        self.assertEqual(1, response.json()["annotation_count"])
+        with database.db() as conn:
+            frame = conn.execute(
+                """SELECT i.original_frame_index FROM annotations a JOIN images i ON i.id = a.image_id
+                    WHERE i.dataset_id = ?""", (response.json()["id"],),
+            ).fetchone()[0]
+        self.assertEqual(1, frame)
+
+    def test_video_annotation_rejects_missing_or_out_of_range_frame_index(self) -> None:
+        for image in (
+            {"file_name": "frame_000001.jpg", "annotations": []},
+            {"frame_index": 99, "annotations": []},
+        ):
+            annotation = {
+                "format": "landmark-qa/v1", "schema_id": "vf_face_landmark50_v1", "images": [image],
+            }
+            response = self.client.post(
+                f"/api/projects/{self.project_id}/datasets/video", headers=self.headers,
+                data={"schema_id": "vf_face_landmark50_v1"},
+                files={
+                    "file": ("face.avi", small_avi(self.root), "video/x-msvideo"),
+                    "annotation_file": ("face.json", json.dumps(annotation).encode(), "application/json"),
+                },
+            )
+            self.assertEqual(400, response.status_code, response.text)
+        with database.db() as conn:
+            self.assertEqual(0, conn.execute(
+                "SELECT COUNT(*) FROM datasets WHERE project_id = ?", (self.project_id,),
+            ).fetchone()[0])
 
 
 class VideoDecoderTests(unittest.TestCase):
