@@ -14,6 +14,7 @@ FACE_MIGRATION_V2 = "002_face_metrics_and_unlabeled"
 TEMPORAL_METADATA_MIGRATION = "003_temporal_metadata"
 TEMPORAL_TRACKING_MIGRATION = "004_temporal_tracking"
 TEMPORAL_RESULTS_MIGRATION = "005_temporal_results"
+TEMPORAL_REVIEWS_MIGRATION = "006_temporal_reviews"
 
 
 @contextmanager
@@ -72,7 +73,7 @@ def _backup_database_before_migration(version: str = FACE_MIGRATION) -> None:
 
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    for version in (FACE_MIGRATION, FACE_MIGRATION_V2, TEMPORAL_METADATA_MIGRATION, TEMPORAL_TRACKING_MIGRATION, TEMPORAL_RESULTS_MIGRATION):
+    for version in (FACE_MIGRATION, FACE_MIGRATION_V2, TEMPORAL_METADATA_MIGRATION, TEMPORAL_TRACKING_MIGRATION, TEMPORAL_RESULTS_MIGRATION, TEMPORAL_REVIEWS_MIGRATION):
         if _needs_migration(version):
             _backup_database_before_migration(version)
             break
@@ -226,6 +227,28 @@ def init_db() -> None:
             conn.execute("ALTER TABLE temporal_results ADD COLUMN human_x REAL")
         if "human_y" not in temporal_result_columns:
             conn.execute("ALTER TABLE temporal_results ADD COLUMN human_y REAL")
+
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS temporal_review_decisions (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          annotation_id TEXT NOT NULL,
+          keypoint_id INTEGER NOT NULL,
+          temporal_result_id TEXT NOT NULL,
+          source TEXT NOT NULL CHECK(source IN ('human', 'temporal')),
+          selected_x REAL NOT NULL,
+          selected_y REAL NOT NULL,
+          temporal_x REAL,
+          temporal_y REAL,
+          reviewed_at INTEGER NOT NULL,
+          reviewed_project_id TEXT NOT NULL,
+          UNIQUE(run_id, annotation_id, keypoint_id),
+          FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(annotation_id) REFERENCES annotations(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_temporal_reviews_run
+          ON temporal_review_decisions(run_id, source);
+        """)
 
         conn.execute("""
           UPDATE images
@@ -409,4 +432,8 @@ def init_db() -> None:
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
             (TEMPORAL_RESULTS_MIGRATION, int(time.time())),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (TEMPORAL_REVIEWS_MIGRATION, int(time.time())),
         )

@@ -11,7 +11,11 @@ Temporal QA là tính năng thử nghiệm, tùy chọn cho Pose 17 điểm và 
 5. Bật **Temporal QA**, chọn cửa sổ lẻ 5–29 frame và tạo run.
 6. Khi run hoàn tất, panel Temporal hiển thị coverage, warning, unavailable reason, overlay Human/Model/Temporal, quỹ đạo và timeline.
 
-Panel Phase 5 chỉ đọc. Việc chấp nhận tọa độ temporal và export thuộc Phase 6.
+Trong panel review, chọn **Giữ điểm Human** hoặc **Dùng điểm Temporal** cho từng keypoint. Có thể đổi quyết định hoặc bấm **Bỏ lựa chọn**; trạng thái và tọa độ snapshot vẫn còn sau khi tải lại trang. Bộ lọc Review cho phép xem các điểm chưa review hoặc đã chọn theo từng nguồn.
+
+Với Pose, nút export annotation hiện có áp dụng quyết định Temporal vào đúng annotation và keypoint. Tọa độ thay đổi nhưng trạng thái visibility được giữ nguyên; điểm `outside` bị từ chối. Hai nút **Audit JSON** và **Audit CSV** tải raw prediction, Human, Temporal, tọa độ được chọn và provenance của review.
+
+Export Face áp dụng quyết định Temporal thuộc bước Phase 6D.
 
 ## Manifest
 

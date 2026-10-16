@@ -78,6 +78,32 @@ def _coco_annotation_map(
     return source_by_file, source_by_annotation_id, unresolved_db_ids
 
 
+def _landmark_annotation_map(payload: dict, dataset_id: str) -> tuple[dict[str, dict], dict[str, str]]:
+    """Map stored annotation IDs to landmark-qa/v1 annotation objects by preserved import order."""
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT a.id, i.file_name FROM annotations a JOIN images i ON i.id = a.image_id
+               WHERE i.dataset_id = ? ORDER BY i.file_name, a.rowid""", (dataset_id,),
+        ).fetchall()
+    db_ids_by_file: dict[str, list[str]] = {}
+    for row in rows:
+        db_ids_by_file.setdefault(row["file_name"], []).append(row["id"])
+    source_images = {
+        str(image.get("file_name", "")).replace("\\", "/"): image
+        for image in payload.get("images", []) if isinstance(image, dict)
+    }
+    mapped: dict[str, dict] = {}
+    unresolved: dict[str, str] = {}
+    for file_name, annotation_ids in db_ids_by_file.items():
+        annotations = source_images.get(file_name, {}).get("annotations", [])
+        if not isinstance(annotations, list) or len(annotations) != len(annotation_ids):
+            reason = f"source landmark-qa annotation count does not match stored annotations for {file_name}"
+            unresolved.update({annotation_id: reason for annotation_id in annotation_ids})
+            continue
+        mapped.update(zip(annotation_ids, annotations))
+    return mapped, unresolved
+
+
 def _export_headers(response: Response, requested: int, applied: int, skipped: list[dict]) -> None:
     response.headers["X-Export-Requested"] = str(requested)
     response.headers["X-Export-Applied"] = str(applied)
@@ -152,6 +178,15 @@ def export_dataset(
                WHERE run_id = ? AND review = 'use_suggestion'""",
             (run_id,),
         ).fetchall()
+        temporal_reviews = conn.execute(
+            """SELECT d.id, d.annotation_id, d.keypoint_id, d.source, d.selected_x, d.selected_y,
+                      d.temporal_result_id, d.reviewed_at, i.file_name
+               FROM temporal_review_decisions d
+               JOIN annotations a ON a.id = d.annotation_id
+               JOIN images i ON i.id = a.image_id AND i.dataset_id = ?
+               WHERE d.run_id = ? ORDER BY d.reviewed_at, d.id""",
+            (run["dataset_id"], run_id),
+        ).fetchall()
 
     schema = load_schema(dataset["schema_id"])
     kp_name_to_id = {kp["name"]: kp["id"] for kp in schema["keypoints"]}
@@ -204,17 +239,40 @@ def export_dataset(
             keypoints[keypoint_offset] = warning["suggested_x"]
             keypoints[keypoint_offset + 1] = warning["suggested_y"]
             applied += 1
-        if applied != len(reviewed) and not allow_partial:
+        for decision in temporal_reviews:
+            coco_id = VF_TO_COCO17.get(decision["keypoint_id"])
+            detail = {"review_id": decision["id"], "annotation_id": decision["annotation_id"],
+                      "keypoint_id": decision["keypoint_id"], "source": decision["source"]}
+            if coco_id is None:
+                skipped.append({**detail, "reason": "keypoint is not mapped to COCO-17"})
+                continue
+            annotation = source_by_annotation_id.get(decision["annotation_id"])
+            if annotation is None:
+                skipped.append({**detail, "reason": unresolved_db_ids.get(decision["annotation_id"], "annotation_id is not mapped to source COCO")})
+                continue
+            keypoints = annotation.get("keypoints")
+            offset = coco_id * 3
+            if not isinstance(keypoints, list) or len(keypoints) < offset + 3:
+                skipped.append({**detail, "reason": f"source COCO annotation lacks keypoint index {coco_id}"})
+                continue
+            if keypoints[offset + 2] == 0:
+                skipped.append({**detail, "reason": "outside keypoints cannot be replaced"})
+                continue
+            keypoints[offset] = decision["selected_x"]
+            keypoints[offset + 1] = decision["selected_y"]
+            applied += 1
+        requested = len(reviewed) + len(temporal_reviews)
+        if applied != requested and not allow_partial:
             raise HTTPException(
                 409,
                 detail={
                     "message": "COCO export could not apply every use_suggestion review; retry with allow_partial=true to export applicable points.",
-                    "requested": len(reviewed),
+                    "requested": requested,
                     "applied": applied,
                     "skipped": skipped,
                 },
             )
-        _export_headers(response, len(reviewed), applied, skipped)
+        _export_headers(response, requested, applied, skipped)
         return payload
 
     for img in payload.get("images", []):
@@ -227,10 +285,34 @@ def export_dataset(
                         new_x, new_y = updates[fn][pt_id]
                         pt["x"] = new_x
                         pt["y"] = new_y
-                        if pt.get("state") == "outside":
-                            pt["state"] = "visible"
+    source_by_annotation_id, unresolved_db_ids = _landmark_annotation_map(payload, run["dataset_id"])
+    skipped = []
+    temporal_applied = 0
+    for decision in temporal_reviews:
+        annotation = source_by_annotation_id.get(decision["annotation_id"])
+        detail = {"review_id": decision["id"], "annotation_id": decision["annotation_id"],
+                  "keypoint_id": decision["keypoint_id"], "source": decision["source"]}
+        if annotation is None:
+            skipped.append({**detail, "reason": unresolved_db_ids.get(decision["annotation_id"], "annotation_id is not mapped to source landmark-qa")})
+            continue
+        point = next((point for point in annotation.get("keypoints", [])
+                      if isinstance(point, dict) and point.get("id") == decision["keypoint_id"]), None)
+        if point is None:
+            skipped.append({**detail, "reason": "source annotation lacks keypoint"})
+            continue
+        if point.get("state") == "outside":
+            skipped.append({**detail, "reason": "outside keypoints cannot be replaced"})
+            continue
+        point["x"], point["y"] = decision["selected_x"], decision["selected_y"]
+        temporal_applied += 1
 
-    _export_headers(response, len(reviewed), len(reviewed), [])
+    requested = len(reviewed) + len(temporal_reviews)
+    applied = len(reviewed) + temporal_applied
+    if applied != requested and not allow_partial:
+        raise HTTPException(409, detail={"message": "Pose export could not apply every review; retry with allow_partial=true.",
+                                         "requested": requested, "applied": applied, "skipped": skipped})
+
+    _export_headers(response, requested, applied, skipped)
     return payload
 
 

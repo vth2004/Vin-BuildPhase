@@ -124,6 +124,84 @@ class TemporalApiTests(unittest.TestCase):
                 WHERE w.run_id = ? AND t.estimate_status = 'unavailable'""", (run["id"],)).fetchone()[0]
         self.assertEqual(0, unavailable_warnings)
 
+    def test_review_decisions_are_scoped_to_annotation_and_snapshot_coordinates(self) -> None:
+        run = self._create_run()
+        self._seed_track(run["id"])
+        process_temporal_run(run["id"], "pose", list(range(1, 18)), database.db)
+        with database.db() as conn:
+            first = conn.execute(
+                """SELECT * FROM temporal_results WHERE run_id = ? AND estimate_status = 'available'
+                   AND annotation_id IS NOT NULL ORDER BY frame_index LIMIT 1""", (run["id"],),
+            ).fetchone()
+        self.assertIsNotNone(first)
+        endpoint = f"/api/projects/{self.project_id}/runs/{run['id']}/temporal/results/{first['id']}/review"
+        chosen = self.client.put(endpoint, headers=self.headers, json={"source": "temporal"})
+        self.assertEqual(200, chosen.status_code, chosen.text)
+        self.assertEqual(first["temporal_x"], chosen.json()["selected_x"])
+        self.assertEqual(first["annotation_id"], chosen.json()["annotation_id"])
+
+        with database.db() as conn:
+            conn.execute("UPDATE temporal_results SET temporal_x = temporal_x + 50 WHERE id = ?", (first["id"],))
+        listing = self.client.get(f"/api/projects/{self.project_id}/runs/{run['id']}/temporal/reviews", headers=self.headers)
+        self.assertEqual(1, listing.json()["total"])
+        self.assertEqual(first["temporal_x"], listing.json()["items"][0]["selected_x"])
+        summary = self.client.get(f"/api/projects/{self.project_id}/runs/{run['id']}/temporal/summary", headers=self.headers)
+        self.assertEqual(1, summary.json()["reviewed_temporal"])
+
+        kept = self.client.put(endpoint, headers=self.headers, json={"source": "human"})
+        self.assertEqual(200, kept.status_code, kept.text)
+        self.assertEqual(chosen.json()["id"], kept.json()["id"])
+        self.assertEqual(1, self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run['id']}/temporal/summary", headers=self.headers,
+        ).json()["reviewed_human"])
+        self.assertEqual(204, self.client.delete(endpoint, headers=self.headers).status_code)
+        self.assertEqual(0, self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run['id']}/temporal/reviews", headers=self.headers,
+        ).json()["total"])
+        with database.db() as conn:
+            second = conn.execute(
+                """SELECT id, annotation_id FROM temporal_results WHERE run_id = ?
+                   AND estimate_status = 'available' AND keypoint_id = ? AND annotation_id != ? LIMIT 1""",
+                (run["id"], first["keypoint_id"], first["annotation_id"]),
+            ).fetchone()
+        self.assertIsNotNone(second)
+        second_endpoint = endpoint.replace(first["id"], second["id"])
+        self.assertEqual(200, self.client.put(endpoint, headers=self.headers, json={"source": "human"}).status_code)
+        self.assertEqual(200, self.client.put(second_endpoint, headers=self.headers, json={"source": "human"}).status_code)
+        decisions = self.client.get(f"/api/projects/{self.project_id}/runs/{run['id']}/temporal/reviews", headers=self.headers).json()
+        self.assertEqual(2, decisions["total"])
+        self.assertEqual({first["annotation_id"], second["annotation_id"]}, {item["annotation_id"] for item in decisions["items"]})
+
+    def test_review_rejects_unavailable_outside_and_cross_project(self) -> None:
+        run = self._create_run()
+        self._seed_track(run["id"])
+        process_temporal_run(run["id"], "pose", list(range(1, 18)), database.db)
+        with database.db() as conn:
+            unavailable = conn.execute(
+                """SELECT * FROM temporal_results WHERE run_id = ? AND estimate_status = 'available'
+                   AND annotation_id IS NOT NULL LIMIT 1""", (run["id"],),
+            ).fetchone()
+            conn.execute("UPDATE temporal_results SET estimate_status = 'unavailable' WHERE id = ?", (unavailable["id"],))
+        self.assertIsNotNone(unavailable)
+        endpoint = f"/api/projects/{self.project_id}/runs/{run['id']}/temporal/results/{unavailable['id']}/review"
+        self.assertEqual(409, self.client.put(endpoint, headers=self.headers, json={"source": "temporal"}).status_code)
+        with database.db() as conn:
+            annotation = conn.execute("SELECT keypoints_json FROM annotations WHERE id = ?", (unavailable["annotation_id"],)).fetchone()
+            points = json.loads(annotation["keypoints_json"])
+            next(point for point in points if point["id"] == unavailable["keypoint_id"])["state"] = "outside"
+            conn.execute("UPDATE annotations SET keypoints_json = ? WHERE id = ?", (json.dumps(points), unavailable["annotation_id"]))
+        self.assertEqual(409, self.client.put(endpoint, headers=self.headers, json={"source": "human"}).status_code)
+        other = self.client.post("/api/projects", json={"name": "other"}).json()
+        forbidden = endpoint.replace(self.project_id, other["id"])
+        self.assertEqual(404, self.client.put(forbidden, headers={"Authorization": f"Bearer {other['recovery_key']}"}, json={"source": "human"}).status_code)
+
+    def test_review_migration_is_idempotent(self) -> None:
+        database.init_db()
+        database.init_db()
+        with database.db() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", (database.TEMPORAL_REVIEWS_MIGRATION,)).fetchone()[0]
+        self.assertEqual(1, count)
+
     def test_disabled_run_has_no_temporal_access_and_cross_project_is_hidden(self) -> None:
         disabled = self._create_run(enabled=False)
         response = self.client.get(f"/api/projects/{self.project_id}/runs/{disabled['id']}/temporal/summary", headers=self.headers)

@@ -365,6 +365,9 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 
 ### Phase 6 — Chấp nhận điểm và export (M) · Mốc demo 2
 
+- **6A hoàn thành ngày 2026-10-16:** migration `006_temporal_reviews` có backup và chạy lại an toàn; API `GET /reviews`, `PUT/DELETE /results/{result_id}/review`; lưu lựa chọn Human/Temporal cùng tọa độ snapshot theo run, annotation và keypoint. Summary đếm quyết định. Chặn result sai run/project, estimate không khả dụng và điểm `outside`.
+- **6B hoàn thành ngày 2026-10-16:** panel Pose/Face cho chọn, đổi hoặc bỏ lựa chọn từng điểm; reload khôi phục quyết định; danh sách có badge và lọc theo trạng thái review; summary tách số điểm dùng Temporal và giữ Human. Nút Temporal chỉ bật khi estimate hợp lệ và điểm gắn với annotation.
+- **6C hoàn thành ngày 2026-10-16:** export Pose COCO và `landmark-qa/v1` áp dụng decision như lớp cuối theo đúng annotation/keypoint, giữ visibility và từ chối điểm `outside`; annotation nguồn không đổi. Audit JSON/CSV chứa Human, raw model, Temporal, tọa độ được chọn, track và provenance; panel có nút tải báo cáo.
 - Chọn/đổi/bỏ temporal; lưu decision; export coordinate và audit report.
 - **Test:** đúng keypoint/instance; giữ visibility; không tạo `outside`; export khớp decision/provenance.
 - **Hoàn thành:** review và export đúng instance.

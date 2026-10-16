@@ -132,6 +132,43 @@ class PoseExportAndExifTests(unittest.TestCase):
     def export(self, run_id: str, suffix: str = ""):
         return self.client.get(f"/api/projects/{self.project_id}/runs/{run_id}/export{suffix}", headers=self.headers)
 
+    def add_temporal_review(self, dataset_id: str, annotation_number: int, vf_id: int,
+                            source: str = "temporal", selected: tuple[float, float] = (7001.0, 7002.0)) -> tuple[str, str]:
+        now = int(time.time())
+        with database.db() as conn:
+            annotation = conn.execute(
+                """SELECT a.id AS annotation_id, a.image_id, a.keypoints_json FROM annotations a
+                   JOIN images i ON i.id = a.image_id WHERE i.dataset_id = ? ORDER BY a.rowid LIMIT 1 OFFSET ?""",
+                (dataset_id, annotation_number),
+            ).fetchone()
+            run_id, result_id, review_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+            point = next(point for point in json.loads(annotation["keypoints_json"]) if point["id"] == vf_id)
+            conn.execute(
+                """INSERT INTO runs (id, project_id, dataset_id, status, progress, mode, created_at,
+                   temporal_enabled, temporal_window_size, temporal_algorithm_version)
+                   VALUES (?, ?, ?, 'completed', 100, 'K1', ?, 1, 15, 'robust-local-fit-v1')""",
+                (run_id, self.project_id, dataset_id, now),
+            )
+            conn.execute(
+                """INSERT INTO temporal_results (
+                   id, run_id, segment_id, internal_track_id, image_id, annotation_id, frame_index, keypoint_id,
+                   human_x, human_y, temporal_x, temporal_y, estimate_status, method, temporal_quality,
+                   support_count, time_source, supporting_model_count, trajectory_json, created_at)
+                   VALUES (?, ?, 0, 'track-1', ?, ?, 0, ?, ?, ?, 7001, 7002, 'available', 'interpolation',
+                           0.9, 6, 'frame_index', 2, '[]', ?)""",
+                (result_id, run_id, annotation["image_id"], annotation["annotation_id"], vf_id,
+                 point.get("x"), point.get("y"), now),
+            )
+            conn.execute(
+                """INSERT INTO temporal_review_decisions (
+                   id, run_id, annotation_id, keypoint_id, temporal_result_id, source, selected_x, selected_y,
+                   temporal_x, temporal_y, reviewed_at, reviewed_project_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 7001, 7002, ?, ?)""",
+                (review_id, run_id, annotation["annotation_id"], vf_id, result_id, source,
+                 selected[0], selected[1], now, self.project_id),
+            )
+        return run_id, result_id
+
     def test_coco_export_updates_each_vf_point_on_the_correct_person_and_preserves_visibility(self) -> None:
         source = coco_payload()
         dataset_id = self.upload("vf_humanpose17_v1", source)
@@ -197,6 +234,50 @@ class PoseExportAndExifTests(unittest.TestCase):
         self.assertEqual(200, exported.status_code)
         point = exported.json()["images"][0]["annotations"][0]["keypoints"][0]
         self.assertEqual([9001.0, 8001.0], [point["x"], point["y"]])
+
+    def test_temporal_coco_export_updates_exact_instance_and_preserves_visibility(self) -> None:
+        source = coco_payload()
+        dataset_id = self.upload("vf_humanpose17_v1", source)
+        run_id, _ = self.add_temporal_review(dataset_id, 1, 3)
+        exported = self.export(run_id)
+        self.assertEqual(200, exported.status_code, exported.text)
+        first, second = exported.json()["annotations"]
+        self.assertEqual(source["annotations"][0], first)
+        self.assertEqual([7001.0, 7002.0, 1], second["keypoints"][3:6])
+        self.assertEqual("1", exported.headers["X-Export-Applied"])
+
+        audit_json = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/temporal/export/audit.json", headers=self.headers,
+        )
+        self.assertEqual(200, audit_json.status_code, audit_json.text)
+        self.assertEqual("landmark-qa/temporal-review-v1", audit_json.json()["format"])
+        self.assertEqual(1, len(audit_json.json()["decisions"]))
+        self.assertEqual("occluded", audit_json.json()["decisions"][0]["source_state"])
+        audit_csv = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/temporal/export/audit.csv", headers=self.headers,
+        )
+        self.assertEqual(200, audit_csv.status_code)
+        self.assertIn("annotation_id", audit_csv.text.splitlines()[0])
+        self.assertIn("temporal-audit-", audit_csv.headers["content-disposition"])
+
+    def test_temporal_landmark_export_preserves_state_and_rejects_outside(self) -> None:
+        source = pose_lqa()
+        dataset_id = self.upload("vf_humanpose17_v1", source)
+        run_id, _ = self.add_temporal_review(dataset_id, 0, 1)
+        exported = self.export(run_id)
+        self.assertEqual(200, exported.status_code, exported.text)
+        point = exported.json()["images"][0]["annotations"][0]["keypoints"][0]
+        self.assertEqual([7001.0, 7002.0, "visible"], [point["x"], point["y"], point["state"]])
+
+        outside_source = pose_lqa()
+        outside_source["images"][0]["annotations"][0]["keypoints"][0]["state"] = "outside"
+        outside_source["images"][0]["annotations"][0]["keypoints"][0]["x"] = None
+        outside_source["images"][0]["annotations"][0]["keypoints"][0]["y"] = None
+        outside_dataset = self.upload("vf_humanpose17_v1", outside_source)
+        outside_run, _ = self.add_temporal_review(outside_dataset, 0, 1)
+        rejected = self.export(outside_run)
+        self.assertEqual(409, rejected.status_code)
+        self.assertEqual("outside keypoints cannot be replaced", rejected.json()["detail"]["skipped"][0]["reason"])
 
     def test_exif_orientation_is_rejected_for_pose_and_face_unless_override_enabled(self) -> None:
         rotated = image_bytes(orientation=6)
