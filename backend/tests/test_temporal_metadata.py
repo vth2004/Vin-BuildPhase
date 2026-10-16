@@ -98,6 +98,7 @@ class TemporalMetadataTests(unittest.TestCase):
         with database.db() as conn:
             self.assertIsNotNone(conn.execute("SELECT 1 FROM schema_migrations WHERE version='003_temporal_metadata'").fetchone())
             self.assertIsNotNone(conn.execute("SELECT 1 FROM schema_migrations WHERE version='004_temporal_tracking'").fetchone())
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM schema_migrations WHERE version='005_temporal_results'").fetchone())
             image_columns = {row[1] for row in conn.execute("PRAGMA table_info(images)")}
             annotation_columns = {row[1] for row in conn.execute("PRAGMA table_info(annotations)")}
             run_columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}

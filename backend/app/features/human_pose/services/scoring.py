@@ -12,6 +12,7 @@ from typing import Any, Callable
 from .observations import build_pose_observations
 from app.shared.temporal.tracking import DetectionTracker, assign_one_to_one, bbox_iou, item_center, item_scale
 from app.shared.temporal.segmentation import is_scene_cut, luminance_histogram
+from app.shared.temporal.service import process_temporal_run
 
 from ..adapters.yolo_pose import YoloPoseAdapter
 from .ensemble import (
@@ -31,6 +32,7 @@ from .ensemble import (
     compute_rho,
     filter_consensus_models,
     get_cached_prediction,
+    match_person_for_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,9 +148,10 @@ def run_scoring(
             "UPDATE runs SET status = 'running', progress = 5, mode = ? WHERE id = ?",
             (actual_mode, run_id),
         )
-        conn.execute("DELETE FROM temporal_observations WHERE run_id = ?", (run_id,))
-        conn.execute("UPDATE annotations SET internal_track_id = NULL, tracking_status = 'untracked' WHERE image_id IN (SELECT id FROM images WHERE dataset_id = ?)",
-                     (dataset["id"],))
+        if run["temporal_enabled"]:
+            conn.execute("DELETE FROM temporal_observations WHERE run_id = ?", (run_id,))
+            conn.execute("UPDATE annotations SET internal_track_id = NULL, tracking_status = 'untracked' WHERE image_id IN (SELECT id FROM images WHERE dataset_id = ?)",
+                         (dataset["id"],))
 
         schema = schema_loader(dataset["schema_id"])
         image_rows = conn.execute("""
@@ -187,7 +190,17 @@ def run_scoring(
 
         human_dict = {pt["id"]: pt for pt in human_points if isinstance(pt, dict) and "id" in pt}
 
-        if row["id"] not in frame_cache:
+        model_matches: dict[str, dict[str, Any] | None]
+        if not run["temporal_enabled"]:
+            model_matches = {}
+            for m_name, predictor in predictors.items():
+                try:
+                    predictions = get_cached_prediction(image_path, m_name, predictor.predict)
+                    model_matches[m_name] = match_person_for_model(human_points, predictions)
+                except Exception as error:
+                    logger.warning("Lỗi dự đoán model %s trên ảnh %s: %s", m_name, file_name, error)
+                    model_matches[m_name] = None
+        elif row["id"] not in frame_cache:
             predictions: dict[str, list[dict[str, Any]]] = {}
             for m_name, predictor in predictors.items():
                 try:
@@ -219,12 +232,13 @@ def run_scoring(
                         """INSERT INTO temporal_observations (
                              id, run_id, sequence_id, segment_id, internal_track_id, image_id, detection_index,
                              bbox_json, keypoints_json, observation_source, supporting_model_count,
-                             supporting_models_json, ensemble_disagreement, tracking_status
-                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                             supporting_models_json, ensemble_disagreement, tracking_status, raw_keypoints_json
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (str(uuid.uuid4()), run_id, row["sequence_id"], item["segment_id"], item["internal_track_id"],
                          row["id"], detection_index, json.dumps(item.get("bbox")), json.dumps(item["keypoints"]),
                          item["observation_source"], item["supporting_model_count"], json.dumps(item["supporting_models"]),
-                         item["ensemble_disagreement"], "uncertain" if item.get("tracking_uncertain") else "confirmed"),
+                         item["ensemble_disagreement"], "uncertain" if item.get("tracking_uncertain") else "confirmed",
+                         json.dumps(item.get("raw_keypoints", {}))),
                     )
             matched_by_annotation, uncertain = _match_pose_annotations(rows_by_image[row["id"]], tracked)
             frame_cache[row["id"]] = (matched_by_annotation, uncertain)
@@ -236,13 +250,14 @@ def run_scoring(
                 for annotation_id in uncertain:
                     conn.execute("UPDATE annotations SET tracking_status = 'tracking_uncertain' WHERE id = ?", (annotation_id,))
 
-        matched_by_annotation, uncertain = frame_cache[row["id"]]
-        observation = matched_by_annotation.get(annot_id)
-        if observation is None:
-            if annot_id in uncertain:
-                logger.info("Pose annotation %s is tracking_uncertain on %s", annot_id, file_name)
-            continue
-        model_matches: dict[str, dict[str, Any] | None] = observation["model_matches"]
+        if run["temporal_enabled"]:
+            matched_by_annotation, uncertain = frame_cache[row["id"]]
+            observation = matched_by_annotation.get(annot_id)
+            if observation is None:
+                if annot_id in uncertain:
+                    logger.info("Pose annotation %s is tracking_uncertain on %s", annot_id, file_name)
+                continue
+            model_matches = observation["model_matches"]
 
         # 2. Lọc đồng thuận Bounding Box (loại trừ model bắt nhầm người khác)
         valid_matches, K_eff = filter_consensus_models(
@@ -385,6 +400,8 @@ def run_scoring(
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 w,
             )
+    process_temporal_run(run_id, "pose", list(range(1, 18)), db_factory)
+    with db_factory() as conn:
         conn.execute(
             "UPDATE runs SET status = 'completed', progress = 100, mode = ? WHERE id = ?",
             (actual_mode, run_id),

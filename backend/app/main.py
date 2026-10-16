@@ -8,7 +8,7 @@ from app.core.database import init_db
 from app.features.face_landmark_vf50 import RUN_MODE as FACE_RUN_MODE
 from app.features.face_landmark_vf50 import api as face_api
 from app.features.face_landmark_vf50.services.run import execute_face_run
-from app.routers import datasets, projects, runs, warnings
+from app.routers import datasets, projects, runs, temporal, warnings
 from app.features.human_pose.services.run import execute_run as execute_human_pose_run
 from app.shared.jobs import register_run_handler
 
@@ -41,4 +41,5 @@ app.include_router(projects.router)
 app.include_router(datasets.router)
 app.include_router(runs.router)
 app.include_router(warnings.router)
+app.include_router(temporal.router)
 app.include_router(face_api.router)

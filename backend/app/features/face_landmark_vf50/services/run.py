@@ -10,6 +10,7 @@ from typing import Any
 from app.core.database import db
 from app.shared.temporal.tracking import DetectionTracker, assign_one_to_one
 from app.shared.temporal.segmentation import is_scene_cut, luminance_histogram
+from app.shared.temporal.service import process_temporal_run
 
 from ..rules.geometry import compute_iod, compute_iod_with_source
 from ..rules.validation import RuleViolation, check_all_rules
@@ -88,6 +89,8 @@ def _merge_split_skeleton_annotations(annotations: list[dict[str, Any]]) -> list
 def _match_faces(
     annotations: list[dict[str, Any]],
     detections: list[dict[int, dict[str, Any]]],
+    *,
+    ambiguity_enabled: bool = True,
 ) -> list[tuple[dict[str, Any] | None, dict[int, dict[str, Any]]]]:
     # 1-to-1 face case fast-path
     if len(annotations) == 1 and len(detections) == 1:
@@ -126,12 +129,16 @@ def _match_faces(
         d_iod = compute_iod(d)
         det_cutoffs.append(multiplier * d_iod if d_iod > 10.0 else fallback_cut)
 
-    cost = [[
-        math.dist(ann_centroids[i], det_centroids[j]) / max(det_cutoffs[j], 1e-6)
+    raw_cost = [[
+        math.dist(ann_centroids[i], det_centroids[j])
         if ann_centroids[i] and det_centroids[j] else 1e6
         for j in range(num_det)
     ] for i in range(num_ann)]
-    assignment = assign_one_to_one(cost, 1.0, ambiguity_margin=float(spec.get("ambiguity_margin", 0.08)))
+    if ambiguity_enabled:
+        cost = [[value / max(det_cutoffs[j], 1e-6) for j, value in enumerate(row)] for row in raw_cost]
+        assignment = assign_one_to_one(cost, 1.0, ambiguity_margin=float(spec.get("ambiguity_margin", 0.08)))
+    else:
+        assignment = assign_one_to_one(raw_cost, det_cutoffs, ambiguity_margin=-1.0)
 
     matched_ann = set()
     matched_det = set()
@@ -188,9 +195,10 @@ def execute_face_run(run_id: str) -> None:
             (dataset["id"],),
         ).fetchall()
         conn.execute("DELETE FROM face_frame_results WHERE run_id = ?", (run_id,))
-        conn.execute("DELETE FROM temporal_observations WHERE run_id = ?", (run_id,))
-        conn.execute("UPDATE annotations SET internal_track_id = NULL, tracking_status = 'untracked' WHERE image_id IN (SELECT id FROM images WHERE dataset_id = ?)",
-                     (dataset["id"],))
+        if run["temporal_enabled"]:
+            conn.execute("DELETE FROM temporal_observations WHERE run_id = ?", (run_id,))
+            conn.execute("UPDATE annotations SET internal_track_id = NULL, tracking_status = 'untracked' WHERE image_id IN (SELECT id FROM images WHERE dataset_id = ?)",
+                         (dataset["id"],))
         conn.execute(
             "UPDATE runs SET status = 'running', progress = 1, error_message = NULL WHERE id = ?",
             (run_id,),
@@ -201,6 +209,9 @@ def execute_face_run(run_id: str) -> None:
     previous_frame: dict[str, tuple[int | None, int, int]] = {}
     previous_keypoints: dict[str, dict[int, dict[str, Any]]] = {}
     previous_histogram: dict[str, Any] = {}
+    legacy_prev_index: int | None = None
+    legacy_prev_faces: list[dict[str, Any]] = []
+    has_real_frame_index = any(image["frame_index"] is not None for image in images)
 
     total = len(images)
     for image_position, image in enumerate(images):
@@ -237,38 +248,50 @@ def execute_face_run(run_id: str) -> None:
         ]
         annotations = _merge_split_skeleton_annotations(annotations)
         detections = [_model_mapping(face[0]) for face in detector.detect_all_faces(pixels)]
-        tracker = trackers.setdefault(sequence_key, DetectionTracker())
-        tracked = tracker.update([_detection_item(detection) for detection in detections], discontinuity=discontinuity)
-        detection_tracks = {id(detection): tracked[index] for index, detection in enumerate(detections)}
-        with db() as conn:
-            for detection_index, item in enumerate(tracked):
-                conn.execute(
+        detection_tracks: dict[int, dict[str, Any]] = {}
+        if run["temporal_enabled"]:
+            tracker = trackers.setdefault(sequence_key, DetectionTracker())
+            tracked = tracker.update([_detection_item(detection) for detection in detections], discontinuity=discontinuity)
+            detection_tracks = {id(detection): tracked[index] for index, detection in enumerate(detections)}
+            with db() as conn:
+                for detection_index, item in enumerate(tracked):
+                    conn.execute(
                     """INSERT INTO temporal_observations (
                          id, run_id, sequence_id, segment_id, internal_track_id, image_id, detection_index,
                          bbox_json, keypoints_json, observation_source, supporting_model_count,
-                         supporting_models_json, ensemble_disagreement, tracking_status
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'primary', 1, '["mediapipe"]', 0.0, ?)""",
-                    (str(uuid.uuid4()), run_id, image["sequence_id"], item["segment_id"], item["internal_track_id"],
-                     image["id"], detection_index, json.dumps(item.get("bbox")), json.dumps(item["keypoints"]),
-                     "uncertain" if item.get("tracking_uncertain") else "confirmed"),
-                )
-        matches = _match_faces(annotations, detections)
+                         supporting_models_json, ensemble_disagreement, tracking_status, raw_keypoints_json
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'primary', 1, '["mediapipe"]', 0.0, ?, ?)""",
+                        (str(uuid.uuid4()), run_id, image["sequence_id"], item["segment_id"], item["internal_track_id"],
+                         image["id"], detection_index, json.dumps(item.get("bbox")), json.dumps(item["keypoints"]),
+                         "uncertain" if item.get("tracking_uncertain") else "confirmed", json.dumps(item["keypoints"])),
+                    )
+        matches = _match_faces(annotations, detections, ambiguity_enabled=bool(run["temporal_enabled"]))
         if not matches:
             matches = [(annotation, {}) for annotation in annotations] or [(None, {})]
 
+        legacy_current_faces: list[dict[str, Any]] = []
         for face_index, (annotation, model) in enumerate(matches):
             human = annotation["keypoints"] if annotation else {}
             active = human or model
             iod_val, iod_source = compute_iod_with_source(model, human)
             track = detection_tracks.get(id(model)) if model else None
             track_id = track.get("internal_track_id") if track else None
-            prev_face_kpts = previous_keypoints.get(track_id) if track_id and not discontinuity else None
-            if annotation and track_id:
+            if run["temporal_enabled"]:
+                prev_face_kpts = previous_keypoints.get(track_id) if track_id and not discontinuity else None
+            else:
+                prev_face_kpts = None
+                is_consecutive = has_real_frame_index and image["frame_index"] is not None and legacy_prev_index is not None and image["frame_index"] - legacy_prev_index == 1
+                current_center = _centroid(active)
+                if active and is_consecutive and legacy_prev_faces and current_center:
+                    closest = min(legacy_prev_faces, key=lambda item: math.dist(current_center, item["centroid"]))
+                    if math.dist(current_center, closest["centroid"]) <= 1.5 * iod_val:
+                        prev_face_kpts = closest["keypoints"]
+            if run["temporal_enabled"] and annotation and track_id:
                 with db() as conn:
                     status = "tracking_uncertain" if track.get("tracking_uncertain") else "confirmed"
                     conn.execute("UPDATE annotations SET internal_track_id = ?, tracking_status = ? WHERE id = ?",
                                  (track_id, status, annotation["id"]))
-            elif annotation:
+            elif run["temporal_enabled"] and annotation:
                 with db() as conn:
                     conn.execute("UPDATE annotations SET tracking_status = 'tracking_uncertain' WHERE id = ?", (annotation["id"],))
 
@@ -319,14 +342,19 @@ def execute_face_run(run_id: str) -> None:
                 )
             if track_id and active:
                 previous_keypoints[track_id] = active
+            if active and _centroid(active):
+                legacy_current_faces.append({"centroid": _centroid(active), "keypoints": active})
 
         previous_frame[sequence_key] = (cur_frame_index, width, height)
         previous_histogram[sequence_key] = histogram
+        legacy_prev_index = image["frame_index"]
+        legacy_prev_faces = legacy_current_faces
 
         progress = int(5 + ((image_position + 1) / max(total, 1)) * 94)
         with db() as conn:
             conn.execute("UPDATE runs SET progress = ? WHERE id = ?", (progress, run_id))
 
+    process_temporal_run(run_id, "face", list(range(50)), db)
     with db() as conn:
         conn.execute(
             "UPDATE runs SET status = 'completed', progress = 100, error_message = NULL WHERE id = ?",

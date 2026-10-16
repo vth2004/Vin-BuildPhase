@@ -47,6 +47,7 @@ def build_pose_observations(predictions: dict[str, list[dict[str, Any]]], *, pri
         models = sorted(support)
         output.append({"bbox": primary[primary_index].get("bbox"), "score": primary[primary_index].get("score"),
                        "keypoints": fused, "observation_source": "ensemble" if len(models) > 1 else "primary",
+                       "raw_keypoints": primary[primary_index].get("keypoints", {}),
                        "supporting_model_count": len(models), "supporting_models": models,
                        "model_matches": support,
                        "ensemble_disagreement": sum(disagreements) / len(disagreements) if disagreements else 0.0,

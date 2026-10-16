@@ -89,12 +89,23 @@ def _recalculate_result(conn: sqlite3.Connection, result_id: str) -> None:
     human = _json_mapping(row["human_keypoints_json"])
     model = _json_mapping(row["model_keypoints_json"])
     reviewed = _reviewed_points(human, model, _point_sources(conn, result_id))
-    previous_row = conn.execute(
-        """SELECT * FROM face_frame_results
-           WHERE run_id = ? AND face_index = ? AND frame_index < ?
-           ORDER BY frame_index DESC LIMIT 1""",
-        (row["run_id"], row["face_index"], row["frame_index"]),
-    ).fetchone()
+    run = conn.execute("SELECT temporal_enabled FROM runs WHERE id = ?", (row["run_id"],)).fetchone()
+    if run and run["temporal_enabled"] and row["annotation_id"]:
+        track = conn.execute("SELECT internal_track_id, tracking_status FROM annotations WHERE id = ?",
+                             (row["annotation_id"],)).fetchone()
+        previous_row = conn.execute(
+            """SELECT f.* FROM face_frame_results f JOIN annotations a ON a.id = f.annotation_id
+               WHERE f.run_id = ? AND a.internal_track_id = ? AND a.tracking_status = 'confirmed'
+                 AND f.frame_index < ? ORDER BY f.frame_index DESC LIMIT 1""",
+            (row["run_id"], track["internal_track_id"], row["frame_index"]),
+        ).fetchone() if track and track["internal_track_id"] and track["tracking_status"] == "confirmed" else None
+    else:
+        previous_row = conn.execute(
+            """SELECT * FROM face_frame_results
+               WHERE run_id = ? AND face_index = ? AND frame_index < ?
+               ORDER BY frame_index DESC LIMIT 1""",
+            (row["run_id"], row["face_index"], row["frame_index"]),
+        ).fetchone()
     previous = None
     if previous_row:
         previous_human = _json_mapping(previous_row["human_keypoints_json"])

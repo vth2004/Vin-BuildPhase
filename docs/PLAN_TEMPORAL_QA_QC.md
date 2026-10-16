@@ -1,7 +1,7 @@
 # Kế hoạch bổ sung Temporal QA/QC cho Pose và Face (bản rút gọn v3)
 
 - **Nhánh triển khai:** `dev/hiep-temporal-qa`
-- **Trạng thái:** Phase 3 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
+- **Trạng thái:** Phase 4 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
 - **Phạm vi:** Human Pose 17 điểm và Face Landmark VF50.
 
 ## 1. Mục tiêu và phạm vi
@@ -350,6 +350,7 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 
 ### Phase 4 — QA/QC và API (M)
 
+- **Trạng thái: hoàn thành ngày 2026-10-16.** Run snapshot `temporal_enabled`/window/version; temporal-off dùng nhánh QA/QC legacy. Temporal-on lưu kết quả mọi điểm, score/quality/evidence, `annotation_jitter`, unavailable reason và API results/detail/summary có phân trang, lọc, project authorization. R13 Face được đánh dấu `face_r13` và không tạo warning temporal trùng.
 - Temporal result; inconsistency/jitter/score; create-run/results/detail/summary API; gộp evidence.
 - `unavailable` là result status, không phải warning.
 - **Test:** temporal off tương đương baseline; project authorization; run config bất biến; unavailable (kể cả `tracking_uncertain`) không vào warning queue; không đếm trùng.

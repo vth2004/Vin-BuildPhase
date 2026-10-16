@@ -13,6 +13,7 @@ FACE_MIGRATION = "001_face_landmark_vf50"
 FACE_MIGRATION_V2 = "002_face_metrics_and_unlabeled"
 TEMPORAL_METADATA_MIGRATION = "003_temporal_metadata"
 TEMPORAL_TRACKING_MIGRATION = "004_temporal_tracking"
+TEMPORAL_RESULTS_MIGRATION = "005_temporal_results"
 
 
 @contextmanager
@@ -71,7 +72,7 @@ def _backup_database_before_migration(version: str = FACE_MIGRATION) -> None:
 
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    for version in (FACE_MIGRATION, FACE_MIGRATION_V2, TEMPORAL_METADATA_MIGRATION, TEMPORAL_TRACKING_MIGRATION):
+    for version in (FACE_MIGRATION, FACE_MIGRATION_V2, TEMPORAL_METADATA_MIGRATION, TEMPORAL_TRACKING_MIGRATION, TEMPORAL_RESULTS_MIGRATION):
         if _needs_migration(version):
             _backup_database_before_migration(version)
             break
@@ -124,6 +125,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE warnings ADD COLUMN reliability REAL DEFAULT 1.0")
         if "delta" not in existing_warnings:
             conn.execute("ALTER TABLE warnings ADD COLUMN delta REAL DEFAULT 0.0")
+        if "evidence" not in existing_warnings:
+            conn.execute("ALTER TABLE warnings ADD COLUMN evidence TEXT")
         existing_runs = _column_names(conn, "runs")
         if "mode" not in existing_runs:
             conn.execute("ALTER TABLE runs ADD COLUMN mode TEXT DEFAULT 'K2'")
@@ -187,6 +190,7 @@ def init_db() -> None:
           segment_id INTEGER NOT NULL, internal_track_id TEXT NOT NULL,
           image_id TEXT NOT NULL, detection_index INTEGER NOT NULL,
           bbox_json TEXT, keypoints_json TEXT NOT NULL,
+          raw_keypoints_json TEXT,
           observation_source TEXT NOT NULL, supporting_model_count INTEGER NOT NULL,
           supporting_models_json TEXT NOT NULL, ensemble_disagreement REAL NOT NULL DEFAULT 0.0,
           tracking_status TEXT NOT NULL DEFAULT 'confirmed',
@@ -196,7 +200,26 @@ def init_db() -> None:
           ON temporal_observations(run_id, sequence_id, segment_id, internal_track_id);
         CREATE INDEX IF NOT EXISTS idx_temporal_observation_image
           ON temporal_observations(run_id, image_id);
+        CREATE TABLE IF NOT EXISTS temporal_results (
+          id TEXT PRIMARY KEY, run_id TEXT NOT NULL, sequence_id TEXT,
+          segment_id INTEGER NOT NULL, internal_track_id TEXT NOT NULL,
+          image_id TEXT NOT NULL, annotation_id TEXT, frame_index INTEGER NOT NULL,
+          keypoint_id INTEGER NOT NULL, raw_x REAL, raw_y REAL,
+          temporal_x REAL, temporal_y REAL, estimate_status TEXT NOT NULL,
+          method TEXT NOT NULL, unavailable_reason TEXT, temporal_quality REAL NOT NULL,
+          temporal_score REAL, support_count INTEGER NOT NULL, residual REAL,
+          gap_frames INTEGER, gap_us INTEGER, normalization_source TEXT, time_source TEXT NOT NULL,
+          evidence TEXT, observation_source TEXT, supporting_model_count INTEGER NOT NULL DEFAULT 0,
+          trajectory_json TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL,
+          UNIQUE(run_id, image_id, internal_track_id, keypoint_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_temporal_results_filter
+          ON temporal_results(run_id, sequence_id, internal_track_id, frame_index, keypoint_id);
+        CREATE INDEX IF NOT EXISTS idx_temporal_results_status
+          ON temporal_results(run_id, estimate_status, evidence);
         """)
+        if "raw_keypoints_json" not in _column_names(conn, "temporal_observations"):
+            conn.execute("ALTER TABLE temporal_observations ADD COLUMN raw_keypoints_json TEXT")
 
         conn.execute("""
           UPDATE images
@@ -376,4 +399,8 @@ def init_db() -> None:
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
             (TEMPORAL_TRACKING_MIGRATION, int(time.time())),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (TEMPORAL_RESULTS_MIGRATION, int(time.time())),
         )
