@@ -1,7 +1,7 @@
 # Kế hoạch bổ sung Temporal QA/QC cho Pose và Face (bản rút gọn v3)
 
 - **Nhánh triển khai:** `dev/hiep-temporal-qa`
-- **Trạng thái:** Bản nháp thiết kế, chờ hoàn thành Phase 0; chưa triển khai chức năng.
+- **Trạng thái:** Phase 3 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
 - **Phạm vi:** Human Pose 17 điểm và Face Landmark VF50.
 
 ## 1. Mục tiêu và phạm vi
@@ -28,19 +28,27 @@ Bổ sung Temporal QA/QC để đánh giá keypoint dựa trên chuyển động
 
 **Cửa sổ quan sát và thời gian khôi phục che khuất là hai cấu hình khác nhau.** Cửa sổ 29 frame không đồng nghĩa được dự đoán xuyên qua 29 frame bị che.
 
-## 2. Quyết định cần chốt (Phase 0)
+## 2. Quyết định Phase 0
 
 <table>
-  <tr><th>#</th><th>Câu hỏi</th><th>Lựa chọn</th><th>Đề xuất mặc định</th></tr>
-  <tr><td>Q1</td><td>Temporal dùng để làm gì trong scoring?</td><td>(a) thay model reference cho điểm bị che; (b) bắt nhãn người nhảy bất thường; (c) cả hai</td><td>(c), trong đó (a) là chính; (b) là evidence thử nghiệm từ annotation_jitter</td></tr>
-  <tr><td>Q2</td><td>&quot;Temporal averaging&quot; của mentor nghĩa là gì?</td><td>Trung bình thuần / làm mượt / nội suy quỹ đạo</td><td>Robust local fit bậc 2, fallback bậc 1 trong tọa độ chuẩn hóa; không dùng trung bình thuần</td></tr>
-  <tr><td>Q3</td><td>Kịch bản demo chính</td><td>Một người một hành động / nhiều người</td><td>Demo chính một người (có chế độ một người ở 3.5); test vẫn có nhiều người</td></tr>
-  <tr><td>Q4</td><td>Dữ liệu test tích hợp</td><td>Video/frame public có keypoint</td><td>Chọn 1–2 chuỗi nhỏ cho Pose và Face; ghi license, frame range, checksum; không dùng dữ liệu VinFast</td></tr>
-  <tr><td>Q5</td><td>File COCO export thật của nhóm có suy ra được thứ tự frame không?</td><td>Kiểm tra: file_name có chứa số frame không; id ảnh có tăng theo thứ tự frame không; có trường frame riêng không</td><td>Lấy số trong file_name làm nguồn chính; id chỉ là gợi ý; luôn có bước xác nhận</td></tr>
-  <tr><td>Q6</td><td>Parser CVAT XML (parsers/cvat.py) có dùng chung cho Pose không?</td><td>Có / không</td><td>Nhóm export COCO nên Pose không cần parser mới; chỉ ghi nhận kết quả kiểm tra</td></tr>
+  <tr><th>#</th><th>Quyết định ngày 2026-10-16</th><th>Trạng thái/chủ sở hữu</th></tr>
+  <tr><td>Q1</td><td>Temporal phục vụ cả khôi phục reference khi model frame hiện tại yếu và phát hiện annotation nhảy; khôi phục reference là mục đích chính. <code>annotation_jitter</code> chỉ là evidence thử nghiệm, không đổi spatial score.</td><td>Nhóm dự án chốt tạm thời; chờ mentor xác nhận</td></tr>
+  <tr><td>Q2</td><td>Dùng robust local trajectory fit bậc 2, fallback bậc 1, trong tọa độ chuẩn hóa theo track. Không dùng trung bình thuần.</td><td>Nhóm dự án chốt tạm thời; chờ mentor xác nhận</td></tr>
+  <tr><td>Q3</td><td>Demo chính một người/một hành động với fast-path có continuity gate; tracker và test vẫn hỗ trợ nhiều người.</td><td>Đã chốt</td></tr>
+  <tr><td>Q4</td><td>CI dùng fixture tổng hợp xác định cho Pose và Face. Smoke test thủ công dùng Penn Action sequence 0001, frame 000001–000030 cho Pose và 300VW sequence 001 + 410, 30 frame đầu cho Face. Không dùng dữ liệu VinFast và không commit dữ liệu research-only.</td><td>Đã chốt; checksum archive ghi khi acquire</td></tr>
+  <tr><td>Q5</td><td>COCO thật không có trường frame. Chỉ suy candidate mapping từ filename; COCO array order/numeric ID chỉ là gợi ý. Mapping mơ hồ bắt buộc manifest.</td><td>Đã xác minh trên các ZIP hiện có</td></tr>
+  <tr><td>Q6</td><td>Không dùng parser CVAT XML của Face cho Pose. Pose tiếp tục nhận COCO Keypoints 1.0/JSON; chỉ viết adapter XML riêng nếu sau này xuất hiện nhu cầu thật.</td><td>Đã chốt</td></tr>
 </table>
 
-**Hoàn thành Phase 0:** Q1–Q6 có câu trả lời, ngày/người quyết định và được ghi tại đây. Nếu mentor chưa phản hồi Q1–Q2, nhóm phải ghi quyết định tạm thời trước khi code.
+### Bằng chứng Q4–Q6
+
+- **CI fixture:** sinh bằng code với seed cố định; gồm chuyển động đứng yên, đều, đổi hướng, outlier, gap, scene cut, một người và hai người giao nhau. Fixture/expected output được commit; không cần model hoặc network.
+- **Pose smoke fixture:** [Penn Action](https://github.com/dreamdragon/PennAction/blob/master/README) công bố chuỗi RGB liên tiếp và annotation 2D/visibility/bbox nhưng README nguồn không nêu license minh thị. Chỉ dùng research-only, map 13 body joints có ngữ nghĩa sang VF17 và đặt điểm không ánh xạ là `outside`. Ghi SHA-256 archive, URL và ngày tải trong fixture manifest trước lần chạy đầu.
+- **Face smoke fixture:** [300VW](https://www.ibug.doc.ic.ac.uk/resources/300-VW/) dùng research-only, không commit ảnh. Chọn sequence `001` để kiểm tra chuyển động tương đối ổn định và `410` làm ca chuyển động/pose khó; mỗi sequence lấy 30 frame đầu. Archive đã dùng trong benchmark có SHA-256 `8dd5b8a200a4d9804253be79f504100a0305b87510363de7d1b79da6c6d8dbe0`; mapping dùng `experiments/benchmark_face/configs/ibug68_to_vf50.yaml`.
+- **COCO thực tế đã kiểm tra:** `humanposenew.zip` có `train_01.jpg`…`train_20.jpg`, numeric image ID 1…20 và không có `frame`/`frame_id`; có thể tạo một candidate sequence nhưng vẫn phải xác nhận. Các ZIP Face và ZIP hai ảnh cũng không có trường frame; tên ảnh/ID không đủ chứng minh quan hệ thời gian và có trường hợp trộn nhiều prefix/ảnh rời.
+- **Parser:** Pose hiện hỗ trợ COCO/JSON và chủ động từ chối XML; parser CVAT XML thuộc feature Face. Giữ ranh giới feature, không import parser Face vào Pose.
+
+**Kết luận Phase 0:** hoàn thành ngày 2026-10-16. Q1–Q2 có hiệu lực như quyết định tạm thời để triển khai; nếu mentor thay đổi ý nghĩa hoặc thuật toán, dừng trước Phase 3 để cập nhật kế hoạch/config version.
 
 ## 3. Thiết kế
 
@@ -309,11 +317,12 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 
 ### Phase 0 — Chốt quyết định (S, không code)
 
-- Trả lời Q1–Q6; gửi Q1–Q2 cho mentor; export một file COCO thật để kiểm tra Q5; ghi ngày/người quyết định và default.
-- **Hoàn thành:** mục 2 không còn quyết định thiết kế bỏ ngỏ.
+- **Trạng thái: hoàn thành ngày 2026-10-16.** Q1–Q6 và bằng chứng được ghi ở mục 2; Q1–Q2 đã chốt tạm thời và còn tác vụ gửi mentor để xác nhận.
+- **Điểm kiểm soát:** nếu mentor thay đổi Q1/Q2, cập nhật kế hoạch trước Phase 3; việc này không chặn Phase 1–2.
 
 ### Phase 1 — Metadata, suy sequence và xác nhận (M)
 
+- **Trạng thái: hoàn thành ngày 2026-10-16.** Đã triển khai migration `003_temporal_metadata`, manifest/suy thứ tự/xác nhận sequence, bảo toàn source instance/track metadata, chặn temporal khi mapping chưa được xác nhận và bỏ mock fallback của Pose. Script video → frame là hạng mục tùy chọn nên để lại cho Phase 7.
 - Migration sequence/image/run config và metadata source; backup, idempotent; backfill `import_order`.
 - Tự suy sequence/thứ tự frame theo bảng ưu tiên ở 3.8; hiển thị delta/gap nhưng không tự kết luận sampling; manifest tùy chọn để ghi đè; API sequence summary, snapshot mapping và xác nhận (kèm FPS/sampling đều tùy chọn).
 - Parser giữ frame/instance metadata; source track ID chỉ lưu nếu có.
@@ -325,6 +334,7 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 
 ### Phase 2 — Ghép annotation, tracking và phân đoạn (M/L)
 
+- **Trạng thái: hoàn thành ngày 2026-10-16.** Pose đã chuyển sang observation stream detection-first độc lập annotation; Pose/Face dùng matching một-một có ambiguity gate, track/segment nội bộ và lưu provenance trong `temporal_observations`. R13 Face chỉ nhận frame trước của cùng track đã xác nhận. Scene-cut và continuity threshold hiện là mặc định chưa hiệu chỉnh như rủi ro đã nêu.
 - Tạo Pose observation stream độc lập annotation: primary `yolo26s-pose`, secondary-to-primary matching, ensemble `p_star` và provenance; mất primary thì ngắt track.
 - Shared matcher không sửa matcher cũ: Pose Hungarian tâm + IoU; Face tái sử dụng cost/cutoff hiện tại và bổ sung ambiguity margin; mơ hồ → `tracking_uncertain`.
 - Nối primary detection giữa các frame; scene segmentation; fast-path một người có continuity gate; R13 chỉ dùng confirmed track.
@@ -333,6 +343,7 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 
 ### Phase 3 — Temporal engine (M)
 
+- **Trạng thái: hoàn thành ngày 2026-10-16.** Đã triển khai engine `robust-local-fit-v1`: cửa sổ 5–29, leave-one-out, normalization Pose/Face nhất quán, IRLS Huber bậc 2/bậc 1, interpolation/extrapolation, quality heuristic và đầy đủ unavailable reason. Gap dùng original frame delta và timestamp tin cậy; timestamp không hợp lệ hoặc chưa xác nhận fallback về frame index.
 - Cửa sổ 5–29, normalization nhất quán, robust fit, leave-one-out, quality, gap/reason và config version.
 - **Test:** 5/15/29; từ chối số chẵn/ngoài khoảng; đứng yên, đều, đổi hướng, outlier, đầu/cuối; < 7 không extrapolate; gap tính theo original frame index/time chứ không theo số ảnh import; sampled FPS đã/chưa xác nhận; timestamp lỗi; đổi normalization; thiếu target transform.
 - **Hoàn thành:** mọi điểm trong phạm vi có estimate hoặc reason tái lập được.
@@ -384,7 +395,7 @@ Nếu thiếu thời gian, dừng sau Phase 5 hoặc 6 vẫn có sản phẩm ho
 
 - Regression backend, feature-boundary test và frontend build sau mỗi phase.
 - Unit test temporal dùng chuỗi tổng hợp xác định, không phụ thuộc model/network.
-- Integration fixture theo Q4 có license, frame range và checksum.
+- CI integration fixture được sinh xác định và commit cùng expected output. Smoke fixture ngoài repo theo Q4 phải có source URL, điều kiện sử dụng, frame range, ngày tải và SHA-256 trong fixture manifest trước khi chạy.
 - Model inference mock trong CI; model thật chỉ ở smoke test/benchmark.
 - Có fixture một người cho demo và nhiều người cho tracking/ghép annotation.
 - Nghiệm thu chung: run cũ/annotation nguồn/QA hiện tại tiếp tục dùng; temporal off tương đương baseline; temporal 5–29 chạy Pose/Face; review/export đúng instance.

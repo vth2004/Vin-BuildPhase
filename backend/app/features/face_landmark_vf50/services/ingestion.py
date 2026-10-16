@@ -45,6 +45,9 @@ def _parse_single_payload(content: bytes) -> list[dict[str, Any]]:
             "file_name": item.get("file_name", ""),
             "width": item.get("width"),
             "height": item.get("height"),
+            "original_frame_index": item.get("frame_index", item.get("original_frame_index")),
+            "sequence_name": item.get("sequence", item.get("sequence_name")),
+            "timestamp_us": item.get("timestamp_us"),
             "annotations": [{"label": "face_landmarks", "keypoints": _points_from_mapping(item.get("keypoints", {}))}],
         }
         for item in parsed
@@ -162,12 +165,21 @@ def parse_face_annotations(content: bytes, image_names: set[str]) -> list[dict[s
             annotations = []
             for annotation in image.get("annotations", []):
                 mapping = {int(point["id"]): point for point in annotation.get("keypoints", []) if "id" in point}
-                annotations.append({"label": annotation.get("label", "face_landmarks"), "keypoints": _points_from_mapping(mapping)})
+                source_instance_id = annotation.get("instance_id", annotation.get("id"))
+                annotations.append({
+                    "label": annotation.get("label", "face_landmarks"),
+                    "keypoints": _points_from_mapping(mapping),
+                    "source_instance_id": str(source_instance_id) if source_instance_id is not None else None,
+                    "source_track_id": str(annotation["track_id"]) if annotation.get("track_id") is not None else None,
+                })
             if annotations:
                 output.append({
                     "file_name": name,
                     "width": image.get("width"),
                     "height": image.get("height"),
+                    "original_frame_index": image.get("frame_index", image.get("original_frame_index")),
+                    "sequence_name": image.get("sequence", image.get("sequence_name")),
+                    "timestamp_us": image.get("timestamp_us"),
                     "annotations": annotations,
                 })
     else:
@@ -179,6 +191,9 @@ def parse_face_annotations(content: bytes, image_names: set[str]) -> list[dict[s
             "file_name": name,
             "width": record.get("width"),
             "height": record.get("height"),
+            "original_frame_index": record.get("original_frame_index"),
+            "sequence_name": record.get("sequence_name"),
+            "timestamp_us": record.get("timestamp_us"),
             "annotations": [],
         })
         target["annotations"].extend(record.get("annotations", []))
@@ -186,4 +201,27 @@ def parse_face_annotations(content: bytes, image_names: set[str]) -> list[dict[s
     output = [record for record in output_by_name.values() if record.get("annotations")]
     if not output:
         raise HTTPException(400, "No usable VF50 annotations match the uploaded images")
+
+    # Preserve sequence and source-instance metadata after format normalization.
+    if isinstance(payload, dict):
+        source_images = payload.get("images") if isinstance(payload.get("images"), list) else []
+        source_annotations = payload.get("annotations") if isinstance(payload.get("annotations"), list) else []
+        for record in output:
+            source_image = next((
+                image for image in source_images
+                if Path(str(image.get("file_name", ""))).name.casefold() == Path(record["file_name"]).name.casefold()
+            ), None)
+            if not isinstance(source_image, dict):
+                continue
+            record["coco_array_position"] = source_images.index(source_image)
+            record["coco_image_id"] = source_image.get("id")
+            record["original_frame_index"] = source_image.get("frame_index", source_image.get("frame"))
+            record["sequence_name"] = source_image.get("sequence", source_image.get("sequence_name"))
+            record["timestamp_us"] = source_image.get("timestamp_us")
+            matching = [a for a in source_annotations if a.get("image_id") == source_image.get("id")]
+            for normalized, source in zip(record["annotations"], matching):
+                attrs = source.get("attributes") if isinstance(source.get("attributes"), dict) else {}
+                track_id = next((source.get(key, attrs.get(key)) for key in ("track_id", "group_id", "instance_id", "face_id") if source.get(key, attrs.get(key)) is not None), None)
+                normalized["source_instance_id"] = str(source["id"]) if source.get("id") is not None else None
+                normalized["source_track_id"] = str(track_id) if track_id is not None else None
     return output

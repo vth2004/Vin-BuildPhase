@@ -35,11 +35,14 @@ class FaceMigrationTests(unittest.TestCase):
                 conn.close()
             with patch.object(database, "DATA_DIR", data_dir), patch.object(database, "DB_PATH", db_path):
                 database.init_db()
+                database.init_db()
             conn = sqlite3.connect(db_path)
             try:
                 self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0])
                 image_columns = {row[1] for row in conn.execute("PRAGMA table_info(images)")}
                 self.assertIn("frame_index", image_columns)
+                self.assertIn("frame_index_source", image_columns)
+                self.assertIn("sequence_id", image_columns)
                 warning_columns = {row[1] for row in conn.execute("PRAGMA table_info(warnings)")}
                 self.assertIn("annotation_id", warning_columns)
                 self.assertIsNotNone(conn.execute(
@@ -47,6 +50,9 @@ class FaceMigrationTests(unittest.TestCase):
                 ).fetchone())
                 self.assertIsNotNone(conn.execute(
                     "SELECT 1 FROM schema_migrations WHERE version=?", (database.FACE_MIGRATION,)
+                ).fetchone())
+                self.assertIsNotNone(conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version=?", (database.TEMPORAL_METADATA_MIGRATION,)
                 ).fetchone())
             finally:
                 conn.close()

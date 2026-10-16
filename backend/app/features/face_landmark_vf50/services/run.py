@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from app.core.database import db
+from app.shared.temporal.tracking import DetectionTracker, assign_one_to_one
+from app.shared.temporal.segmentation import is_scene_cut, luminance_histogram
 
 from ..rules.geometry import compute_iod, compute_iod_with_source
 from ..rules.validation import RuleViolation, check_all_rules
@@ -38,6 +40,14 @@ def _centroid(points: dict[int, dict[str, Any]]) -> tuple[float, float] | None:
     if not visible:
         return None
     return sum(point[0] for point in visible) / len(visible), sum(point[1] for point in visible) / len(visible)
+
+
+def _detection_item(points: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    visible = [(float(p["x"]), float(p["y"])) for p in points.values()
+               if p.get("x") is not None and p.get("y") is not None]
+    bbox = (min(x for x, _ in visible), min(y for _, y in visible),
+            max(x for x, _ in visible), max(y for _, y in visible)) if visible else None
+    return {"bbox": bbox, "keypoints": points}
 
 
 def _merge_split_skeleton_annotations(annotations: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -103,18 +113,12 @@ def _match_faces(
     if not detections:
         return [(a, {}) for a in annotations]
 
-    # Global optimal Hungarian matching
-    import numpy as np
-    from scipy.optimize import linear_sum_assignment
-
     spec = get_hungarian_matching_spec()
     multiplier = spec.get("centroid_distance_cutoff_iod_multiplier", 2.0)
     fallback_cut = spec.get("max_distance_px_fallback", 150.0)
 
     num_ann = len(annotations)
     num_det = len(detections)
-    cost = np.zeros((num_ann, num_det), dtype=np.float64)
-
     ann_centroids = [_centroid(a["keypoints"]) for a in annotations]
     det_centroids = [_centroid(d) for d in detections]
     det_cutoffs = []
@@ -122,26 +126,21 @@ def _match_faces(
         d_iod = compute_iod(d)
         det_cutoffs.append(multiplier * d_iod if d_iod > 10.0 else fallback_cut)
 
-    for i in range(num_ann):
-        for j in range(num_det):
-            c_a = ann_centroids[i]
-            c_d = det_centroids[j]
-            if c_a and c_d:
-                cost[i, j] = math.dist(c_a, c_d)
-            else:
-                cost[i, j] = 1e6
-
-    row_ind, col_ind = linear_sum_assignment(cost)
+    cost = [[
+        math.dist(ann_centroids[i], det_centroids[j]) / max(det_cutoffs[j], 1e-6)
+        if ann_centroids[i] and det_centroids[j] else 1e6
+        for j in range(num_det)
+    ] for i in range(num_ann)]
+    assignment = assign_one_to_one(cost, 1.0, ambiguity_margin=float(spec.get("ambiguity_margin", 0.08)))
 
     matched_ann = set()
     matched_det = set()
     matches: list[tuple[dict[str, Any] | None, dict[int, dict[str, Any]]]] = []
 
-    for r, c in zip(row_ind, col_ind):
-        if cost[r, c] <= det_cutoffs[c]:
-            matches.append((annotations[r], detections[c]))
-            matched_ann.add(r)
-            matched_det.add(c)
+    for match in assignment.matches:
+        matches.append((annotations[match.left_index], detections[match.right_index]))
+        matched_ann.add(match.left_index)
+        matched_det.add(match.right_index)
 
     for i in range(num_ann):
         if i not in matched_ann:
@@ -182,20 +181,26 @@ def execute_face_run(run_id: str) -> None:
         if not dataset:
             raise RuntimeError("Dataset not found for Face run")
         images = conn.execute(
-            """SELECT id, file_name, width, height, frame_index
-               FROM images WHERE dataset_id = ? ORDER BY COALESCE(frame_index, 2147483647), file_name""",
+            """SELECT id, file_name, width, height, frame_index, sequence_id,
+                      original_frame_index
+               FROM images WHERE dataset_id = ?
+               ORDER BY COALESCE(sequence_id, ''), COALESCE(original_frame_index, frame_index, 2147483647), file_name""",
             (dataset["id"],),
         ).fetchall()
         conn.execute("DELETE FROM face_frame_results WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM temporal_observations WHERE run_id = ?", (run_id,))
+        conn.execute("UPDATE annotations SET internal_track_id = NULL, tracking_status = 'untracked' WHERE image_id IN (SELECT id FROM images WHERE dataset_id = ?)",
+                     (dataset["id"],))
         conn.execute(
             "UPDATE runs SET status = 'running', progress = 1, error_message = NULL WHERE id = ?",
             (run_id,),
         )
 
     root = Path(dataset["storage_path"]).resolve()
-    has_real_frame_index = any(img["frame_index"] is not None for img in images)
-    prev_image_frame_index: int | None = None
-    prev_frame_faces: list[dict[str, Any]] = []
+    trackers: dict[str, DetectionTracker] = {}
+    previous_frame: dict[str, tuple[int | None, int, int]] = {}
+    previous_keypoints: dict[str, dict[int, dict[str, Any]]] = {}
+    previous_histogram: dict[str, Any] = {}
 
     total = len(images)
     for image_position, image in enumerate(images):
@@ -208,13 +213,14 @@ def execute_face_run(run_id: str) -> None:
         if pixels is None:
             raise RuntimeError(f"Cannot decode image: {image['file_name']}")
         height, width = pixels.shape[:2]
-        cur_frame_index = image["frame_index"]
-        is_consecutive = (
-            has_real_frame_index
-            and cur_frame_index is not None
-            and prev_image_frame_index is not None
-            and cur_frame_index - prev_image_frame_index == 1
-        )
+        sequence_key = image["sequence_id"] or f"legacy:{dataset['id']}"
+        cur_frame_index = image["original_frame_index"] if image["original_frame_index"] is not None else image["frame_index"]
+        previous = previous_frame.get(sequence_key)
+        histogram = luminance_histogram(pixels)
+        discontinuity = bool(previous and (
+            cur_frame_index is None or previous[0] is None or cur_frame_index - previous[0] != 1
+            or previous[1] != width or previous[2] != height
+        )) or is_scene_cut(previous_histogram.get(sequence_key), histogram)
 
         with db() as conn:
             annotation_rows = conn.execute(
@@ -231,28 +237,40 @@ def execute_face_run(run_id: str) -> None:
         ]
         annotations = _merge_split_skeleton_annotations(annotations)
         detections = [_model_mapping(face[0]) for face in detector.detect_all_faces(pixels)]
+        tracker = trackers.setdefault(sequence_key, DetectionTracker())
+        tracked = tracker.update([_detection_item(detection) for detection in detections], discontinuity=discontinuity)
+        detection_tracks = {id(detection): tracked[index] for index, detection in enumerate(detections)}
+        with db() as conn:
+            for detection_index, item in enumerate(tracked):
+                conn.execute(
+                    """INSERT INTO temporal_observations (
+                         id, run_id, sequence_id, segment_id, internal_track_id, image_id, detection_index,
+                         bbox_json, keypoints_json, observation_source, supporting_model_count,
+                         supporting_models_json, ensemble_disagreement, tracking_status
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'primary', 1, '["mediapipe"]', 0.0, ?)""",
+                    (str(uuid.uuid4()), run_id, image["sequence_id"], item["segment_id"], item["internal_track_id"],
+                     image["id"], detection_index, json.dumps(item.get("bbox")), json.dumps(item["keypoints"]),
+                     "uncertain" if item.get("tracking_uncertain") else "confirmed"),
+                )
         matches = _match_faces(annotations, detections)
         if not matches:
             matches = [(annotation, {}) for annotation in annotations] or [(None, {})]
 
-        current_faces_for_prev: list[dict[str, Any]] = []
         for face_index, (annotation, model) in enumerate(matches):
             human = annotation["keypoints"] if annotation else {}
             active = human or model
             iod_val, iod_source = compute_iod_with_source(model, human)
-
-            prev_face_kpts = None
-            if active and is_consecutive and prev_frame_faces:
-                cur_c = _centroid(active)
-                if cur_c:
-                    closest_prev = min(
-                        prev_frame_faces,
-                        key=lambda pf: math.dist(cur_c, pf["centroid"]) if pf.get("centroid") else float("inf"),
-                    )
-                    if closest_prev.get("centroid"):
-                        c_dist = math.dist(cur_c, closest_prev["centroid"])
-                        if c_dist <= 1.5 * iod_val:
-                            prev_face_kpts = closest_prev["keypoints"]
+            track = detection_tracks.get(id(model)) if model else None
+            track_id = track.get("internal_track_id") if track else None
+            prev_face_kpts = previous_keypoints.get(track_id) if track_id and not discontinuity else None
+            if annotation and track_id:
+                with db() as conn:
+                    status = "tracking_uncertain" if track.get("tracking_uncertain") else "confirmed"
+                    conn.execute("UPDATE annotations SET internal_track_id = ?, tracking_status = ? WHERE id = ?",
+                                 (track_id, status, annotation["id"]))
+            elif annotation:
+                with db() as conn:
+                    conn.execute("UPDATE annotations SET tracking_status = 'tracking_uncertain' WHERE id = ?", (annotation["id"],))
 
             raw_violations = check_all_rules(
                 active,
@@ -299,15 +317,11 @@ def execute_face_run(run_id: str) -> None:
                         quality["case_description"], now, now,
                     ),
                 )
-            if active:
-                current_faces_for_prev.append({
-                    "centroid": _centroid(active),
-                    "keypoints": active,
-                    "iod": iod_val,
-                })
+            if track_id and active:
+                previous_keypoints[track_id] = active
 
-        prev_image_frame_index = cur_frame_index
-        prev_frame_faces = current_faces_for_prev
+        previous_frame[sequence_key] = (cur_frame_index, width, height)
+        previous_histogram[sequence_key] = histogram
 
         progress = int(5 + ((image_position + 1) / max(total, 1)) * 94)
         with db() as conn:

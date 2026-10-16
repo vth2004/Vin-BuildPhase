@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import time
 import uuid
-import traceback
 
 from app.core.database import db
 from .dataset import load_schema
@@ -43,15 +42,12 @@ def make_mock_results(run_id: str) -> None:
 
 
 def execute_run(run_id: str) -> None:
-    try:
-        from .scoring import run_scoring
-        with db() as conn:
-            run = conn.execute("SELECT dataset_id FROM runs WHERE id = ?", (run_id,)).fetchone()
-            dataset = conn.execute("SELECT schema_id FROM datasets WHERE id = ?", (run["dataset_id"],)).fetchone()
-        if dataset and dataset["schema_id"] == "vf_humanpose17_v1":
-            run_scoring(run_id, db, load_schema)
-        else:
-            make_mock_results(run_id)
-    except Exception:
-        traceback.print_exc()
-        make_mock_results(run_id)
+    from .scoring import run_scoring
+    with db() as conn:
+        run = conn.execute("SELECT dataset_id FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if not run:
+            return
+        dataset = conn.execute("SELECT schema_id FROM datasets WHERE id = ?", (run["dataset_id"],)).fetchone()
+    if not dataset or dataset["schema_id"] != "vf_humanpose17_v1":
+        raise RuntimeError("Dataset is not compatible with Human Pose scoring")
+    run_scoring(run_id, db, load_schema)

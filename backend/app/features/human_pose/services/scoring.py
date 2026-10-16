@@ -9,6 +9,10 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from .observations import build_pose_observations
+from app.shared.temporal.tracking import DetectionTracker, assign_one_to_one, bbox_iou, item_center, item_scale
+from app.shared.temporal.segmentation import is_scene_cut, luminance_histogram
+
 from ..adapters.yolo_pose import YoloPoseAdapter
 from .ensemble import (
     ALPHA,
@@ -27,10 +31,43 @@ from .ensemble import (
     compute_rho,
     filter_consensus_models,
     get_cached_prediction,
-    match_person_for_model,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _annotation_item(points: list[dict[str, Any]]) -> dict[str, Any]:
+    valid = [(float(point["x"]), float(point["y"])) for point in points
+             if point.get("x") is not None and point.get("y") is not None and point.get("state") != "outside"]
+    bbox = (min(x for x, _ in valid), min(y for _, y in valid),
+            max(x for x, _ in valid), max(y for _, y in valid)) if valid else None
+    return {"bbox": bbox, "keypoints": {point["id"]: point for point in points if "id" in point}}
+
+
+def _match_pose_annotations(rows: list[Any], observations: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    annotation_items: list[dict[str, Any]] = []
+    valid_rows: list[Any] = []
+    for row in rows:
+        try:
+            points = json.loads(row["keypoints_json"])
+        except Exception:
+            continue
+        annotation_items.append(_annotation_item(points))
+        valid_rows.append(row)
+    costs: list[list[float]] = []
+    for annotation in annotation_items:
+        row_costs = []
+        for observation in observations:
+            ann_center, obs_center = item_center(annotation), item_center(observation)
+            center_cost = math.dist(ann_center, obs_center) / max(item_scale(annotation), item_scale(observation)) if ann_center and obs_center else 1e6
+            iou_cost = 1.0 - bbox_iou(annotation.get("bbox"), observation.get("bbox"))
+            row_costs.append(0.65 * center_cost + 0.35 * iou_cost)
+        costs.append(row_costs)
+    assignment = assign_one_to_one(costs, 1.25, ambiguity_margin=0.08) if costs else None
+    matched = {valid_rows[item.left_index]["annotation_id"]: observations[item.right_index]
+               for item in assignment.matches} if assignment else {}
+    uncertain = {valid_rows[index]["annotation_id"] for index in assignment.uncertain_left} if assignment else set()
+    return matched, uncertain
 
 
 def setup_predictors(
@@ -109,14 +146,18 @@ def run_scoring(
             "UPDATE runs SET status = 'running', progress = 5, mode = ? WHERE id = ?",
             (actual_mode, run_id),
         )
+        conn.execute("DELETE FROM temporal_observations WHERE run_id = ?", (run_id,))
+        conn.execute("UPDATE annotations SET internal_track_id = NULL, tracking_status = 'untracked' WHERE image_id IN (SELECT id FROM images WHERE dataset_id = ?)",
+                     (dataset["id"],))
 
         schema = schema_loader(dataset["schema_id"])
         image_rows = conn.execute("""
-            SELECT i.id, i.file_name, i.width, i.height, a.id AS annotation_id, a.keypoints_json
+            SELECT i.id, i.file_name, i.width, i.height, i.sequence_id, i.original_frame_index,
+                   a.id AS annotation_id, a.keypoints_json
             FROM images i
             JOIN annotations a ON a.image_id = i.id
             WHERE i.dataset_id = ?
-            ORDER BY i.file_name
+            ORDER BY COALESCE(i.sequence_id, ''), COALESCE(i.original_frame_index, 2147483647), i.file_name, a.id
         """, (dataset["id"],)).fetchall()
 
     storage_root = Path(dataset["storage_path"]).resolve()
@@ -124,6 +165,13 @@ def run_scoring(
     total_images = len(image_rows)
 
     warnings_to_insert = []
+    rows_by_image: dict[str, list[Any]] = {}
+    for image_row in image_rows:
+        rows_by_image.setdefault(image_row["id"], []).append(image_row)
+    frame_cache: dict[str, tuple[dict[str, dict[str, Any]], set[str]]] = {}
+    trackers: dict[str, DetectionTracker] = {}
+    previous_frame: dict[str, tuple[int | None, int | None, int | None]] = {}
+    previous_histogram: dict[str, Any] = {}
 
     for idx, row in enumerate(image_rows):
         file_name = row["file_name"]
@@ -139,16 +187,62 @@ def run_scoring(
 
         human_dict = {pt["id"]: pt for pt in human_points if isinstance(pt, dict) and "id" in pt}
 
-        # 1. Dự đoán tuần tự từ các model khả dụng
-        model_matches: dict[str, dict[str, Any] | None] = {}
-        for m_name, predictor in predictors.items():
+        if row["id"] not in frame_cache:
+            predictions: dict[str, list[dict[str, Any]]] = {}
+            for m_name, predictor in predictors.items():
+                try:
+                    predictions[m_name] = get_cached_prediction(image_path, m_name, predictor.predict)
+                except Exception as e:
+                    logger.warning(f"Lỗi dự đoán model {m_name} trên ảnh {file_name}: {e}")
+                    predictions[m_name] = []
+            observations = build_pose_observations(predictions)
+            sequence_key = row["sequence_id"] or f"legacy:{dataset['id']}"
+            frame_index = row["original_frame_index"]
+            prior = previous_frame.get(sequence_key)
             try:
-                preds = get_cached_prediction(image_path, m_name, predictor.predict)
-                matched = match_person_for_model(human_points, preds)
-                model_matches[m_name] = matched
-            except Exception as e:
-                logger.warning(f"Lỗi dự đoán model {m_name} trên ảnh {file_name}: {e}")
-                model_matches[m_name] = None
+                from PIL import Image
+                with Image.open(image_path) as source_image:
+                    histogram = luminance_histogram(source_image.convert("L"))
+            except Exception:
+                histogram = None
+            discontinuity = bool(prior and (
+                frame_index is None or prior[0] is None or frame_index - prior[0] != 1
+                or prior[1] != row["width"] or prior[2] != row["height"]
+            )) or bool(histogram is not None and is_scene_cut(previous_histogram.get(sequence_key), histogram))
+            tracked = trackers.setdefault(sequence_key, DetectionTracker()).update(observations, discontinuity=discontinuity)
+            previous_frame[sequence_key] = (frame_index, row["width"], row["height"])
+            if histogram is not None:
+                previous_histogram[sequence_key] = histogram
+            with db_factory() as conn:
+                for detection_index, item in enumerate(tracked):
+                    conn.execute(
+                        """INSERT INTO temporal_observations (
+                             id, run_id, sequence_id, segment_id, internal_track_id, image_id, detection_index,
+                             bbox_json, keypoints_json, observation_source, supporting_model_count,
+                             supporting_models_json, ensemble_disagreement, tracking_status
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (str(uuid.uuid4()), run_id, row["sequence_id"], item["segment_id"], item["internal_track_id"],
+                         row["id"], detection_index, json.dumps(item.get("bbox")), json.dumps(item["keypoints"]),
+                         item["observation_source"], item["supporting_model_count"], json.dumps(item["supporting_models"]),
+                         item["ensemble_disagreement"], "uncertain" if item.get("tracking_uncertain") else "confirmed"),
+                    )
+            matched_by_annotation, uncertain = _match_pose_annotations(rows_by_image[row["id"]], tracked)
+            frame_cache[row["id"]] = (matched_by_annotation, uncertain)
+            with db_factory() as conn:
+                for annotation_id, observation in matched_by_annotation.items():
+                    status = "tracking_uncertain" if observation.get("tracking_uncertain") else "confirmed"
+                    conn.execute("UPDATE annotations SET internal_track_id = ?, tracking_status = ? WHERE id = ?",
+                                 (observation["internal_track_id"], status, annotation_id))
+                for annotation_id in uncertain:
+                    conn.execute("UPDATE annotations SET tracking_status = 'tracking_uncertain' WHERE id = ?", (annotation_id,))
+
+        matched_by_annotation, uncertain = frame_cache[row["id"]]
+        observation = matched_by_annotation.get(annot_id)
+        if observation is None:
+            if annot_id in uncertain:
+                logger.info("Pose annotation %s is tracking_uncertain on %s", annot_id, file_name)
+            continue
+        model_matches: dict[str, dict[str, Any] | None] = observation["model_matches"]
 
         # 2. Lọc đồng thuận Bounding Box (loại trừ model bắt nhầm người khác)
         valid_matches, K_eff = filter_consensus_models(

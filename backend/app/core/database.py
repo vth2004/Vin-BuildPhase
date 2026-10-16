@@ -11,6 +11,8 @@ from app.core.config import DATA_DIR, DB_PATH
 
 FACE_MIGRATION = "001_face_landmark_vf50"
 FACE_MIGRATION_V2 = "002_face_metrics_and_unlabeled"
+TEMPORAL_METADATA_MIGRATION = "003_temporal_metadata"
+TEMPORAL_TRACKING_MIGRATION = "004_temporal_tracking"
 
 
 @contextmanager
@@ -69,10 +71,10 @@ def _backup_database_before_migration(version: str = FACE_MIGRATION) -> None:
 
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if _needs_migration(FACE_MIGRATION):
-        _backup_database_before_migration(FACE_MIGRATION)
-    elif _needs_migration(FACE_MIGRATION_V2):
-        _backup_database_before_migration(FACE_MIGRATION_V2)
+    for version in (FACE_MIGRATION, FACE_MIGRATION_V2, TEMPORAL_METADATA_MIGRATION, TEMPORAL_TRACKING_MIGRATION):
+        if _needs_migration(version):
+            _backup_database_before_migration(version)
+            break
     with db() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -127,10 +129,81 @@ def init_db() -> None:
             conn.execute("ALTER TABLE runs ADD COLUMN mode TEXT DEFAULT 'K2'")
         if "error_message" not in existing_runs:
             conn.execute("ALTER TABLE runs ADD COLUMN error_message TEXT")
+        if "temporal_enabled" not in existing_runs:
+            conn.execute("ALTER TABLE runs ADD COLUMN temporal_enabled INTEGER NOT NULL DEFAULT 0")
+        if "temporal_window_size" not in existing_runs:
+            conn.execute("ALTER TABLE runs ADD COLUMN temporal_window_size INTEGER NOT NULL DEFAULT 15")
+        if "temporal_algorithm_version" not in existing_runs:
+            conn.execute("ALTER TABLE runs ADD COLUMN temporal_algorithm_version TEXT")
 
         existing_images = _column_names(conn, "images")
         if "frame_index" not in existing_images:
             conn.execute("ALTER TABLE images ADD COLUMN frame_index INTEGER")
+        if "sequence_id" not in existing_images:
+            conn.execute("ALTER TABLE images ADD COLUMN sequence_id TEXT")
+        if "original_frame_index" not in existing_images:
+            conn.execute("ALTER TABLE images ADD COLUMN original_frame_index INTEGER")
+        if "timestamp_us" not in existing_images:
+            conn.execute("ALTER TABLE images ADD COLUMN timestamp_us INTEGER")
+        if "timestamp_source" not in existing_images:
+            conn.execute("ALTER TABLE images ADD COLUMN timestamp_source TEXT NOT NULL DEFAULT 'unavailable'")
+        if "frame_index_source" not in existing_images:
+            conn.execute("ALTER TABLE images ADD COLUMN frame_index_source TEXT NOT NULL DEFAULT 'import_order'")
+
+        existing_annotations = _column_names(conn, "annotations")
+        if "source_instance_id" not in existing_annotations:
+            conn.execute("ALTER TABLE annotations ADD COLUMN source_instance_id TEXT")
+        if "source_track_id" not in existing_annotations:
+            conn.execute("ALTER TABLE annotations ADD COLUMN source_track_id TEXT")
+        if "internal_track_id" not in existing_annotations:
+            conn.execute("ALTER TABLE annotations ADD COLUMN internal_track_id TEXT")
+        if "tracking_status" not in existing_annotations:
+            conn.execute("ALTER TABLE annotations ADD COLUMN tracking_status TEXT NOT NULL DEFAULT 'untracked'")
+
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS sequences (
+          id TEXT PRIMARY KEY,
+          dataset_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          source TEXT NOT NULL,
+          fps REAL,
+          fps_source TEXT,
+          frame_order_source TEXT NOT NULL,
+          confirmed_at INTEGER,
+          confirmed_project_id TEXT,
+          confirmation_source TEXT,
+          mapping_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          sampling_confirmed INTEGER NOT NULL DEFAULT 0,
+          requires_manifest INTEGER NOT NULL DEFAULT 0,
+          import_status TEXT NOT NULL DEFAULT 'ready',
+          media_path TEXT,
+          created_at INTEGER NOT NULL,
+          UNIQUE(dataset_id, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sequences_dataset ON sequences(dataset_id);
+        CREATE INDEX IF NOT EXISTS idx_images_sequence_frame ON images(sequence_id, original_frame_index);
+        CREATE TABLE IF NOT EXISTS temporal_observations (
+          id TEXT PRIMARY KEY, run_id TEXT NOT NULL, sequence_id TEXT,
+          segment_id INTEGER NOT NULL, internal_track_id TEXT NOT NULL,
+          image_id TEXT NOT NULL, detection_index INTEGER NOT NULL,
+          bbox_json TEXT, keypoints_json TEXT NOT NULL,
+          observation_source TEXT NOT NULL, supporting_model_count INTEGER NOT NULL,
+          supporting_models_json TEXT NOT NULL, ensemble_disagreement REAL NOT NULL DEFAULT 0.0,
+          tracking_status TEXT NOT NULL DEFAULT 'confirmed',
+          UNIQUE(run_id, image_id, detection_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_temporal_observation_track
+          ON temporal_observations(run_id, sequence_id, segment_id, internal_track_id);
+        CREATE INDEX IF NOT EXISTS idx_temporal_observation_image
+          ON temporal_observations(run_id, image_id);
+        """)
+
+        conn.execute("""
+          UPDATE images
+             SET original_frame_index = COALESCE(original_frame_index, frame_index),
+                 frame_index_source = COALESCE(NULLIF(frame_index_source, ''), 'import_order'),
+                 timestamp_source = COALESCE(NULLIF(timestamp_source, ''), 'unavailable')
+        """)
 
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS face_frame_results (
@@ -295,3 +368,12 @@ def init_db() -> None:
                 "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (FACE_MIGRATION_V2, int(time.time())),
             )
+
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (TEMPORAL_METADATA_MIGRATION, int(time.time())),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (TEMPORAL_TRACKING_MIGRATION, int(time.time())),
+        )

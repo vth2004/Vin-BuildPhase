@@ -29,8 +29,8 @@ def _is_symlink(info: zipfile.ZipInfo) -> bool:
     return stat.S_ISLNK(mode)
 
 
-def safe_extract_images(upload: UploadFile, destination: Path) -> tuple[list[str], bytes | None]:
-    """Extract images while preserving relative paths and return the best embedded annotation."""
+def safe_extract_dataset(upload: UploadFile, destination: Path) -> tuple[list[str], bytes | None, bytes | None]:
+    """Extract images and return the best annotation plus optional sequence manifest."""
     destination.mkdir(parents=True, exist_ok=True)
     temp = destination.parent / "source.zip"
     compressed_size = 0
@@ -47,6 +47,7 @@ def safe_extract_images(upload: UploadFile, destination: Path) -> tuple[list[str
 
     annotation: bytes | None = None
     annotation_score = -1
+    manifest: bytes | None = None
     try:
         with zipfile.ZipFile(temp) as archive:
             infos = archive.infolist()
@@ -75,6 +76,12 @@ def safe_extract_images(upload: UploadFile, destination: Path) -> tuple[list[str
                     continue
 
                 suffix = path.suffix.lower()
+                if path.name.casefold() == "sequence_manifest.json":
+                    with archive.open(info) as source:
+                        manifest = source.read(MAX_UPLOAD_BYTES + 1)
+                    if len(manifest) > MAX_UPLOAD_BYTES:
+                        raise HTTPException(413, "Sequence manifest exceeds 500 MB limit")
+                    continue
                 if suffix in ANNOTATION_EXTENSIONS:
                     score = _annotation_score(path)
                     if score > annotation_score:
@@ -100,8 +107,14 @@ def safe_extract_images(upload: UploadFile, destination: Path) -> tuple[list[str
                             raise HTTPException(413, "Extracted images exceed 500 MB limit")
                         output.write(chunk)
                 images.append(normalized)
-            return sorted(images), annotation
+            return sorted(images), annotation, manifest
     except zipfile.BadZipFile as error:
         raise HTTPException(400, "Invalid ZIP file") from error
     finally:
         temp.unlink(missing_ok=True)
+
+
+def safe_extract_images(upload: UploadFile, destination: Path) -> tuple[list[str], bytes | None]:
+    """Backward-compatible image/annotation extraction helper."""
+    images, annotation, _ = safe_extract_dataset(upload, destination)
+    return images, annotation

@@ -65,7 +65,7 @@ def validate_annotations(payload: object, schema: dict, image_names: set[str]) -
                 annots_by_img.setdefault(img_id, []).append(annot)
 
         output: list[dict] = []
-        for img_id, img_info in coco_images.items():
+        for coco_position, (img_id, img_info) in enumerate(coco_images.items()):
             raw_fn = img_info.get("file_name", "").replace("\\", "/")
             matched_name = None
             if raw_fn in image_names:
@@ -114,7 +114,14 @@ def validate_annotations(payload: object, schema: dict, image_names: set[str]) -
                     points.append({"id": vf_id, "name": vf_name, "x": px, "y": py, "state": state})
 
                 points.sort(key=lambda p: p["id"])
-                checked_annots.append({"label": schema.get("annotation_label", "person"), "keypoints": points})
+                attributes = annot.get("attributes") if isinstance(annot.get("attributes"), dict) else {}
+                source_track_id = next((annot.get(key, attributes.get(key)) for key in ("track_id", "group_id", "instance_id") if annot.get(key, attributes.get(key)) is not None), None)
+                checked_annots.append({
+                    "label": schema.get("annotation_label", "person"),
+                    "keypoints": points,
+                    "source_instance_id": str(annot.get("id")) if annot.get("id") is not None else None,
+                    "source_track_id": str(source_track_id) if source_track_id is not None else None,
+                })
 
             if checked_annots:
                 output.append({
@@ -122,6 +129,11 @@ def validate_annotations(payload: object, schema: dict, image_names: set[str]) -
                     "width": img_info.get("width"),
                     "height": img_info.get("height"),
                     "annotations": checked_annots,
+                    "coco_array_position": coco_position,
+                    "coco_image_id": img_id,
+                    "original_frame_index": img_info.get("frame_index", img_info.get("frame")),
+                    "sequence_name": img_info.get("sequence", img_info.get("sequence_name")),
+                    "timestamp_us": img_info.get("timestamp_us"),
                 })
         if not output:
             raise HTTPException(400, "No matching images found between CVAT COCO JSON and ZIP")
@@ -173,8 +185,22 @@ def validate_annotations(payload: object, schema: dict, image_names: set[str]) -
                     raise HTTPException(400, f"{file_name}: outside points must have null coordinates")
                 if state != "outside" and (not isinstance(x, (int, float)) or not isinstance(y, (int, float))):
                     raise HTTPException(400, f"{file_name}: visible/occluded points require numeric coordinates")
-            checked.append({"label": annotation.get("label", schema["annotation_label"]), "keypoints": points})
-        output.append({"file_name": file_name, "width": image.get("width"), "height": image.get("height"), "annotations": checked})
+            source_instance_id = annotation.get("instance_id", annotation.get("id"))
+            checked.append({
+                "label": annotation.get("label", schema["annotation_label"]),
+                "keypoints": points,
+                "source_instance_id": str(source_instance_id) if source_instance_id is not None else None,
+                "source_track_id": str(annotation["track_id"]) if annotation.get("track_id") is not None else None,
+            })
+        output.append({
+            "file_name": file_name,
+            "width": image.get("width"),
+            "height": image.get("height"),
+            "annotations": checked,
+            "original_frame_index": image.get("frame_index", image.get("original_frame_index")),
+            "sequence_name": image.get("sequence", image.get("sequence_name")),
+            "timestamp_us": image.get("timestamp_us"),
+        })
     return output
 
 
