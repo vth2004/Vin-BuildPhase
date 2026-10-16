@@ -33,7 +33,7 @@ def list_runs(
         rows = conn.execute(
             f"""SELECT r.id, r.dataset_id, r.status, r.progress, r.mode, r.error_message,
                        r.temporal_enabled, r.temporal_window_size, r.temporal_algorithm_version,
-                       r.created_at, d.name AS dataset_name, d.schema_id
+                       r.input_mode, r.created_at, d.name AS dataset_name, d.schema_id
                 FROM runs r JOIN datasets d ON d.id = r.dataset_id
                 WHERE {' AND '.join(clauses)} ORDER BY r.created_at DESC""",
             params,
@@ -70,6 +70,11 @@ def create_run(
             if not sequences or any(not row["confirmed_at"] or row["requires_manifest"] for row in sequences):
                 raise HTTPException(409, "Temporal QA requires confirmed sequence metadata")
         run_id = str(uuid.uuid4())
+        annotation_count = conn.execute(
+            """SELECT COUNT(*) FROM annotations a JOIN images i ON i.id = a.image_id
+                WHERE i.dataset_id = ?""", (dataset_id,),
+        ).fetchone()[0]
+        input_mode = "annotated" if annotation_count else "ai_qc"
         if dataset["schema_id"] == "vf_humanpose17_v1":
             target_mode = "K2"
         elif dataset["schema_id"] == FACE_SCHEMA_ID:
@@ -79,10 +84,11 @@ def create_run(
         conn.execute(
             """INSERT INTO runs (
                 id, project_id, dataset_id, status, progress, mode, created_at,
-                temporal_enabled, temporal_window_size, temporal_algorithm_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                temporal_enabled, temporal_window_size, temporal_algorithm_version, input_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (run_id, project_id, dataset_id, "pending", 0, target_mode, int(time.time()),
-             int(temporal_enabled), window_size, TEMPORAL_ALGORITHM_VERSION if temporal_enabled else None),
+             int(temporal_enabled), window_size, TEMPORAL_ALGORITHM_VERSION if temporal_enabled else None,
+             input_mode),
         )
     background.add_task(dispatch_run, run_id)
     return {
@@ -92,6 +98,7 @@ def create_run(
         "temporal_enabled": temporal_enabled,
         "temporal_window_size": window_size,
         "temporal_algorithm_version": TEMPORAL_ALGORITHM_VERSION if temporal_enabled else None,
+        "input_mode": input_mode,
     }
 
 
@@ -104,7 +111,7 @@ def get_run(
     with db() as conn:
         run = conn.execute(
             """SELECT id, status, progress, dataset_id, mode, error_message,
-                      temporal_enabled, temporal_window_size, temporal_algorithm_version
+                      temporal_enabled, temporal_window_size, temporal_algorithm_version, input_mode
                FROM runs WHERE id = ? AND project_id = ?""",
             (run_id, project_id),
         ).fetchone()

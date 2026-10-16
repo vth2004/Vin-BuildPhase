@@ -85,6 +85,7 @@ export default function HumanPosePage() {
   const [imageDetails, setImageDetails] = useState<ImageDetails | null>(null)
   const [showSkeleton, setShowSkeleton] = useState(true)
   const [runMode, setRunMode] = useState<string | null>(null)
+  const [aiDraftRunId, setAiDraftRunId] = useState<string | null>(null)
 
   // Bộ lọc
   const [minSuspicion, setMinSuspicion] = useState<number>(0.2)
@@ -126,6 +127,7 @@ export default function HumanPosePage() {
     let timerId: any
     const tick = async () => {
       const run = await request(`/projects/${session.projectId}/runs/${runId}`)
+      if (run.status === 'completed' && run.input_mode === 'ai_qc') setAiDraftRunId(runId)
       if (run.mode) setRunMode(run.mode)
       const modeLabel = run.mode === 'K2' ? 'Ensemble K=2' : run.mode === 'K1' || run.mode === 'K1_fast' ? 'K=1 Nhanh' : run.mode === 'K1_fallback' ? 'K=1 (Fallback)' : run.mode ? run.mode : ''
       setMessage(`Tiến độ Run: ${run.status} (${run.progress}%) ${modeLabel ? `[${modeLabel}]` : ''}`)
@@ -303,12 +305,29 @@ export default function HumanPosePage() {
       setActiveDatasetId(datasetId)
       const data = await request(`/projects/${session!.projectId}/runs?dataset_id=${datasetId}&temporal_enabled=${temporalEnabled}&window_size=${temporalWindow}`, { method: 'POST' })
       setRunId(data.id)
+      setAiDraftRunId(null)
       setActiveTemporal(temporalEnabled)
       setWarnings([])
       setSelectedWarning(null)
       setMessage(`Đã bắt đầu chạy Run (${data.mode === 'real' ? 'Model YOLO26s-pose thật' : data.mode || 'Ensemble'})...`)
     } catch (e) {
       setMessage((e as Error).message)
+    }
+  }
+
+  const downloadAiDraft = async () => {
+    if (!session || !aiDraftRunId) return
+    try {
+      const response = await fetch(`${API}/projects/${session.projectId}/runs/${aiDraftRunId}/ai-drafts/export`, { headers: headers() })
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || 'Không thể export AI draft')
+      const url = URL.createObjectURL(await response.blob())
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `pose_ai_draft_${aiDraftRunId}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setMessage((error as Error).message)
     }
   }
 
@@ -461,6 +480,7 @@ export default function HumanPosePage() {
       </header>
 
       {message && <p className="notice">{message}</p>}
+      {aiDraftRunId && <p><button className="btn-export" onClick={downloadAiDraft}>Tải nhãn AI draft (landmark-qa/v1)</button></p>}
 
       {/* 1. Upload Dataset */}
       <section>

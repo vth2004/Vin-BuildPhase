@@ -54,6 +54,7 @@ export default function FaceLandmarkPage() {
   const [temporalWindow, setTemporalWindow] = useState(15)
   const [activeTemporal, setActiveTemporal] = useState(false)
   const [runId, setRunId] = useState('')
+  const [aiDraftAvailable, setAiDraftAvailable] = useState(false)
   const [results, setResults] = useState<FaceResultSummary[]>([])
   const [selected, setSelected] = useState<FaceResultDetail | null>(null)
   const [selectedPoint, setSelectedPoint] = useState<number>(0)
@@ -166,19 +167,21 @@ export default function FaceLandmarkPage() {
     setResults([])
     setSelected(null)
     try {
-      const run = await request<{ id: string }>(
+      const run = await request<{ id: string; input_mode: string }>(
         `/projects/${session.projectId}/runs?dataset_id=${datasetId}&temporal_enabled=${temporalEnabled}&window_size=${temporalWindow}`,
         { method: 'POST' },
       )
       setRunId(run.id)
+      setAiDraftAvailable(false)
       setActiveTemporal(temporalEnabled)
       setMessage('Face run đã bắt đầu.')
       const poll = async () => {
-        const state = await request<{ status: string; progress: number; error_message?: string }>(
+        const state = await request<{ status: string; progress: number; error_message?: string; input_mode?: string }>(
           `/projects/${session.projectId}/runs/${run.id}`,
         )
         setMessage(`Face run: ${state.status} (${state.progress}%)`)
         if (state.status === 'completed') {
+          setAiDraftAvailable(state.input_mode === 'ai_qc')
           setBusy(false)
           await loadProject()
           await loadResults(run.id)
@@ -264,6 +267,22 @@ export default function FaceLandmarkPage() {
     }
   }
 
+  const downloadAiDraft = async () => {
+    if (!session || !runId) return
+    try {
+      const response = await fetch(`${API}/projects/${session.projectId}/runs/${runId}/ai-drafts/export`, { headers: authHeaders() })
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || 'Export AI draft failed')
+      const url = URL.createObjectURL(await response.blob())
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `face_ai_draft_${runId}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setMessage((error as Error).message)
+    }
+  }
+
   const imageUrl = useMemo(() => {
     if (!session || !selected || !datasetId) return ''
     const path = selected.file_name.split('/').map(encodeURIComponent).join('/')
@@ -272,6 +291,7 @@ export default function FaceLandmarkPage() {
 
   const openRun = async (targetRun: FaceRun) => {
     setRunId(targetRun.id)
+    setAiDraftAvailable(targetRun.input_mode === 'ai_qc')
     setDatasetId(targetRun.dataset_id)
     setActiveTemporal(Boolean(targetRun.temporal_enabled))
     setTemporalEnabled(Boolean(targetRun.temporal_enabled))
@@ -395,6 +415,7 @@ export default function FaceLandmarkPage() {
               </select>
             </div>
             <div className="face-actions">
+              {aiDraftAvailable && <button className="btn-export" onClick={downloadAiDraft}>AI draft JSON</button>}
               <button className="btn-success" onClick={batchFix}>Preview & xác nhận batch</button>
               <button className="btn-export" onClick={() => download('cleaned-json')}>JSON</button>
               <button className="btn-export" onClick={() => download('cvat-xml')}>CVAT XML</button>

@@ -5,11 +5,13 @@ import logging
 import math
 import os
 import sqlite3
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 from .observations import build_pose_observations
+from app.shared.ai_drafts import apply_temporal_prediction_qc
 from app.shared.temporal.tracking import DetectionTracker, assign_one_to_one, bbox_iou, item_center, item_scale
 from app.shared.temporal.segmentation import is_scene_cut, luminance_histogram
 from app.shared.temporal.service import process_temporal_run
@@ -118,6 +120,93 @@ def setup_predictors(
     return predictors, actual_mode
 
 
+def _run_unlabeled_pose(
+    run_id: str,
+    dataset: Any,
+    run: Any,
+    predictors: dict[str, Any],
+    db_factory: Callable[[], sqlite3.Connection],
+) -> None:
+    with db_factory() as conn:
+        images = conn.execute(
+            """SELECT id, file_name, width, height, sequence_id, original_frame_index
+                 FROM images WHERE dataset_id = ?
+                ORDER BY COALESCE(sequence_id, ''), COALESCE(original_frame_index, 2147483647), file_name""",
+            (dataset["id"],),
+        ).fetchall()
+        conn.execute("DELETE FROM ai_draft_results WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM temporal_observations WHERE run_id = ?", (run_id,))
+    root = Path(dataset["storage_path"]).resolve()
+    trackers: dict[str, DetectionTracker] = {}
+    previous: dict[str, tuple[int | None, int | None, int | None]] = {}
+    for position, image in enumerate(images):
+        path = (root / image["file_name"]).resolve()
+        predictions: dict[str, list[dict[str, Any]]] = {}
+        for model_name, predictor in predictors.items():
+            try:
+                predictions[model_name] = get_cached_prediction(path, model_name, predictor.predict)
+            except Exception as error:
+                logger.warning("Pose AI-QC prediction failed for %s on %s: %s", model_name, image["file_name"], error)
+                predictions[model_name] = []
+        observations = build_pose_observations(predictions)
+        sequence_key = image["sequence_id"] or f"legacy:{dataset['id']}"
+        prior = previous.get(sequence_key)
+        frame_index = image["original_frame_index"]
+        discontinuity = bool(prior and (
+            frame_index is None or prior[0] is None or frame_index - prior[0] != 1
+            or prior[1] != image["width"] or prior[2] != image["height"]
+        ))
+        tracked = trackers.setdefault(sequence_key, DetectionTracker()).update(observations, discontinuity=discontinuity)
+        previous[sequence_key] = (frame_index, image["width"], image["height"])
+        now = int(time.time())
+        with db_factory() as conn:
+            for instance_index, item in enumerate(tracked):
+                points = [{
+                    "id": int(point_id), "name": str(point_id),
+                    "x": point.get("x"), "y": point.get("y"), "state": "visible",
+                    "confidence": point.get("conf"), "visibility_confirmed": False,
+                } for point_id, point in sorted(item["keypoints"].items())]
+                flags = []
+                if item.get("tracking_uncertain"):
+                    flags.append("tracking_uncertain")
+                if float(item.get("ensemble_disagreement", 0.0)) >= 0.15:
+                    flags.append("prediction_instability")
+                provenance = {
+                    "label": "AI draft", "observation_source": item["observation_source"],
+                    "supporting_models": item["supporting_models"],
+                    "supporting_model_count": item["supporting_model_count"],
+                    "algorithm_version": "pose-ensemble-ai-draft-v1",
+                }
+                conn.execute(
+                    """INSERT INTO ai_draft_results (
+                         id, run_id, image_id, schema_id, instance_index, internal_track_id,
+                         keypoints_json, provenance_json, qc_json, visibility_confirmed, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+                    (str(uuid.uuid4()), run_id, image["id"], dataset["schema_id"], instance_index,
+                     item.get("internal_track_id"), json.dumps(points), json.dumps(provenance),
+                     json.dumps({"flags": flags, "ensemble_disagreement": item.get("ensemble_disagreement", 0.0)}), now),
+                )
+                if run["temporal_enabled"]:
+                    conn.execute(
+                        """INSERT INTO temporal_observations (
+                             id, run_id, sequence_id, segment_id, internal_track_id, image_id, detection_index,
+                             bbox_json, keypoints_json, observation_source, supporting_model_count,
+                             supporting_models_json, ensemble_disagreement, tracking_status, raw_keypoints_json
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (str(uuid.uuid4()), run_id, image["sequence_id"], item["segment_id"], item["internal_track_id"],
+                         image["id"], instance_index, json.dumps(item.get("bbox")), json.dumps(item["keypoints"]),
+                         item["observation_source"], item["supporting_model_count"], json.dumps(item["supporting_models"]),
+                         item["ensemble_disagreement"], "uncertain" if item.get("tracking_uncertain") else "confirmed",
+                         json.dumps(item.get("raw_keypoints", {}))),
+                    )
+            progress = int(5 + ((position + 1) / max(len(images), 1)) * 94)
+            conn.execute("UPDATE runs SET progress = ? WHERE id = ?", (progress, run_id))
+    if run["temporal_enabled"]:
+        apply_temporal_prediction_qc(run_id, db_factory)
+    with db_factory() as conn:
+        conn.execute("UPDATE runs SET status = 'completed', progress = 100, error_message = NULL WHERE id = ?", (run_id,))
+
+
 def run_scoring(
     run_id: str,
     db_factory: Callable[[], sqlite3.Connection],
@@ -162,6 +251,10 @@ def run_scoring(
             WHERE i.dataset_id = ?
             ORDER BY COALESCE(i.sequence_id, ''), COALESCE(i.original_frame_index, 2147483647), i.file_name, a.id
         """, (dataset["id"],)).fetchall()
+
+    if run["input_mode"] == "ai_qc" and not image_rows:
+        _run_unlabeled_pose(run_id, dataset, run, predictors, db_factory)
+        return
 
     storage_root = Path(dataset["storage_path"]).resolve()
     keypoint_meta = {kp["id"]: kp for kp in schema["keypoints"]}

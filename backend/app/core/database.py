@@ -17,6 +17,7 @@ TEMPORAL_RESULTS_MIGRATION = "005_temporal_results"
 TEMPORAL_REVIEWS_MIGRATION = "006_temporal_reviews"
 VIDEO_INGESTION_MIGRATION = "007_video_ingestion"
 VIDEO_IMPORT_JOBS_MIGRATION = "008_video_import_jobs"
+AI_DRAFT_MIGRATION = "009_ai_drafts"
 
 
 @contextmanager
@@ -75,7 +76,7 @@ def _backup_database_before_migration(version: str = FACE_MIGRATION) -> None:
 
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    for version in (FACE_MIGRATION, FACE_MIGRATION_V2, TEMPORAL_METADATA_MIGRATION, TEMPORAL_TRACKING_MIGRATION, TEMPORAL_RESULTS_MIGRATION, TEMPORAL_REVIEWS_MIGRATION, VIDEO_INGESTION_MIGRATION, VIDEO_IMPORT_JOBS_MIGRATION):
+    for version in (FACE_MIGRATION, FACE_MIGRATION_V2, TEMPORAL_METADATA_MIGRATION, TEMPORAL_TRACKING_MIGRATION, TEMPORAL_RESULTS_MIGRATION, TEMPORAL_REVIEWS_MIGRATION, VIDEO_INGESTION_MIGRATION, VIDEO_IMPORT_JOBS_MIGRATION, AI_DRAFT_MIGRATION):
         if _needs_migration(version):
             _backup_database_before_migration(version)
             break
@@ -141,6 +142,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE runs ADD COLUMN temporal_window_size INTEGER NOT NULL DEFAULT 15")
         if "temporal_algorithm_version" not in existing_runs:
             conn.execute("ALTER TABLE runs ADD COLUMN temporal_algorithm_version TEXT")
+        if "input_mode" not in existing_runs:
+            conn.execute("ALTER TABLE runs ADD COLUMN input_mode TEXT NOT NULL DEFAULT 'annotated'")
 
         existing_images = _column_names(conn, "images")
         if "frame_index" not in existing_images:
@@ -231,6 +234,15 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_video_import_jobs_dataset
           ON video_import_jobs(dataset_id, attempt DESC);
+        CREATE TABLE IF NOT EXISTS ai_draft_results (
+          id TEXT PRIMARY KEY, run_id TEXT NOT NULL, image_id TEXT NOT NULL,
+          schema_id TEXT NOT NULL, instance_index INTEGER NOT NULL,
+          internal_track_id TEXT, keypoints_json TEXT NOT NULL,
+          provenance_json TEXT NOT NULL, qc_json TEXT NOT NULL DEFAULT '{}',
+          visibility_confirmed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+          UNIQUE(run_id, image_id, instance_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_drafts_run ON ai_draft_results(run_id, image_id);
         """)
         sequence_columns = _column_names(conn, "sequences")
         for column, definition in (
@@ -463,4 +475,8 @@ def init_db() -> None:
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
             (VIDEO_IMPORT_JOBS_MIGRATION, int(time.time())),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (AI_DRAFT_MIGRATION, int(time.time())),
         )

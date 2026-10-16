@@ -1,7 +1,7 @@
 # Kế hoạch bổ sung Temporal QA/QC cho Pose và Face (bản rút gọn v3)
 
 - **Nhánh triển khai:** `dev/hiep-temporal-qa`
-- **Trạng thái:** Phase 7 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
+- **Trạng thái:** Phase 8 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
 - **Phạm vi:** Human Pose 17 điểm và Face Landmark VF50.
 
 ## 1. Mục tiêu và phạm vi
@@ -387,6 +387,7 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 
 ### Phase 8 — Không annotation / AI draft (M) · Mốc demo 4
 
+- **Hoàn thành ngày 2026-10-16:** Pose ZIP/video và Face ZIP/video không annotation tạo run `input_mode=ai_qc`. Pose dùng observation detection-first/ensemble; Face chuẩn hóa kết quả MediaPipe không nhãn vào bảng `ai_draft_results`. QC chỉ mô tả prediction (`prediction_instability`, tracking uncertainty, geometry prediction và temporal second derivative), không sinh NME hay metric sai lệch annotation. API list/export AI draft dùng `landmark-qa/v1`, có sequence/frame/track, model và algorithm provenance; mọi visibility mang `visibility_confirmed=false`. UI Pose/Face có nút tải AI draft sau khi run hoàn tất.
 - Mở rộng Pose; temporal QC/provenance cho Face hiện có; ZIP ảnh không nhãn dùng luồng suy sequence; chuẩn hóa AI draft.
 - **Test:** không sinh annotation-error metric; AI visibility chưa xác nhận; Face unlabeled không regression.
 - **Hoàn thành:** Pose/Face chạy cả QA có nhãn và QC không nhãn.

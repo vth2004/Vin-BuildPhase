@@ -11,6 +11,7 @@ export type FaceRun = {
   created_at: number
   temporal_enabled?: boolean
   temporal_window_size?: number
+  input_mode?: string
 }
 export type Point = {
   id: number

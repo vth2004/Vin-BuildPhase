@@ -11,6 +11,7 @@ from app.core.database import db
 from app.shared.temporal.tracking import DetectionTracker, assign_one_to_one
 from app.shared.temporal.segmentation import is_scene_cut, luminance_histogram
 from app.shared.temporal.service import process_temporal_run
+from app.shared.ai_drafts import apply_temporal_prediction_qc
 
 from ..rules.geometry import compute_iod, compute_iod_with_source
 from ..rules.validation import RuleViolation, check_all_rules
@@ -195,6 +196,7 @@ def execute_face_run(run_id: str) -> None:
             (dataset["id"],),
         ).fetchall()
         conn.execute("DELETE FROM face_frame_results WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM ai_draft_results WHERE run_id = ?", (run_id,))
         if run["temporal_enabled"]:
             conn.execute("DELETE FROM temporal_observations WHERE run_id = ?", (run_id,))
             conn.execute("UPDATE annotations SET internal_track_id = NULL, tracking_status = 'untracked' WHERE image_id IN (SELECT id FROM images WHERE dataset_id = ?)",
@@ -249,22 +251,24 @@ def execute_face_run(run_id: str) -> None:
         annotations = _merge_split_skeleton_annotations(annotations)
         detections = [_model_mapping(face[0]) for face in detector.detect_all_faces(pixels)]
         detection_tracks: dict[int, dict[str, Any]] = {}
-        if run["temporal_enabled"]:
+        tracking_enabled = bool(run["temporal_enabled"]) or not annotations
+        if tracking_enabled:
             tracker = trackers.setdefault(sequence_key, DetectionTracker())
             tracked = tracker.update([_detection_item(detection) for detection in detections], discontinuity=discontinuity)
             detection_tracks = {id(detection): tracked[index] for index, detection in enumerate(detections)}
-            with db() as conn:
-                for detection_index, item in enumerate(tracked):
-                    conn.execute(
-                    """INSERT INTO temporal_observations (
-                         id, run_id, sequence_id, segment_id, internal_track_id, image_id, detection_index,
-                         bbox_json, keypoints_json, observation_source, supporting_model_count,
-                         supporting_models_json, ensemble_disagreement, tracking_status, raw_keypoints_json
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'primary', 1, '["mediapipe"]', 0.0, ?, ?)""",
-                        (str(uuid.uuid4()), run_id, image["sequence_id"], item["segment_id"], item["internal_track_id"],
-                         image["id"], detection_index, json.dumps(item.get("bbox")), json.dumps(item["keypoints"]),
-                         "uncertain" if item.get("tracking_uncertain") else "confirmed", json.dumps(item["keypoints"])),
-                    )
+            if run["temporal_enabled"]:
+                with db() as conn:
+                    for detection_index, item in enumerate(tracked):
+                        conn.execute(
+                            """INSERT INTO temporal_observations (
+                                 id, run_id, sequence_id, segment_id, internal_track_id, image_id, detection_index,
+                                 bbox_json, keypoints_json, observation_source, supporting_model_count,
+                                 supporting_models_json, ensemble_disagreement, tracking_status, raw_keypoints_json
+                               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'primary', 1, '["mediapipe"]', 0.0, ?, ?)""",
+                            (str(uuid.uuid4()), run_id, image["sequence_id"], item["segment_id"], item["internal_track_id"],
+                             image["id"], detection_index, json.dumps(item.get("bbox")), json.dumps(item["keypoints"]),
+                             "uncertain" if item.get("tracking_uncertain") else "confirmed", json.dumps(item["keypoints"])),
+                        )
         matches = _match_faces(annotations, detections, ambiguity_enabled=bool(run["temporal_enabled"]))
         if not matches:
             matches = [(annotation, {}) for annotation in annotations] or [(None, {})]
@@ -340,6 +344,26 @@ def execute_face_run(run_id: str) -> None:
                         quality["case_description"], now, now,
                     ),
                 )
+                if result_kind == "unlabeled_face" and model:
+                    draft_points = []
+                    for point_id in range(50):
+                        point = dict(model.get(point_id, {
+                            "id": point_id, "name": str(point_id), "x": None, "y": None, "state": "outside",
+                        }))
+                        point["visibility_confirmed"] = False
+                        draft_points.append(point)
+                    conn.execute(
+                        """INSERT INTO ai_draft_results (
+                             id, run_id, image_id, schema_id, instance_index, internal_track_id,
+                             keypoints_json, provenance_json, qc_json, visibility_confirmed, created_at
+                           ) VALUES (?, ?, ?, 'vf_face_landmark50_v1', ?, ?, ?, ?, ?, 0, ?)""",
+                        (str(uuid.uuid4()), run_id, image["id"], face_index, track_id,
+                         json.dumps(draft_points), json.dumps({
+                             "label": "AI draft", "model": "mediapipe", "confidence_available": False,
+                             "algorithm_version": "mediapipe-vf50-ai-draft-v1",
+                         }), json.dumps({"flags": [item["code"] for item in violations],
+                                        "geometry_violations": violations}), now),
+                    )
             if track_id and active:
                 previous_keypoints[track_id] = active
             if active and _centroid(active):
@@ -355,6 +379,8 @@ def execute_face_run(run_id: str) -> None:
             conn.execute("UPDATE runs SET progress = ? WHERE id = ?", (progress, run_id))
 
     process_temporal_run(run_id, "face", list(range(50)), db)
+    if run["input_mode"] == "ai_qc" and run["temporal_enabled"]:
+        apply_temporal_prediction_qc(run_id, db)
     with db() as conn:
         conn.execute(
             "UPDATE runs SET status = 'completed', progress = 100, error_message = NULL WHERE id = ?",

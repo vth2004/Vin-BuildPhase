@@ -18,6 +18,10 @@ Với Pose, nút export annotation hiện có áp dụng quyết định Tempora
 
 Với Face, **cleaned JSON** và **CVAT XML** cũng áp dụng decision vào đúng annotation/khuôn mặt/keypoint, giữ nguyên `visible`, `occluded`, `outside`. CSV/checklist tiếp tục là báo cáo QA; audit Temporal dùng hai nút JSON/CSV trong panel.
 
+## Luồng không có annotation / AI draft
+
+Pose và Face đều nhận ZIP hoặc video không kèm annotation. Run được đánh dấu `input_mode=ai_qc`; kết quả chỉ phản ánh độ ổn định/geometry của prediction, không có NME hoặc kết luận lỗi nhãn người. Sau khi run hoàn tất, dùng nút **AI draft JSON** để tải `landmark-qa/v1`. Export chứa sequence, original frame index, track, model/algorithm provenance và luôn đặt `visibility_confirmed=false`; reviewer phải xác nhận visibility trước khi dùng như ground truth.
+
 ## Manifest
 
 Manifest phải phủ mọi ảnh trong ZIP. `frame_index` là chỉ số frame gốc; `timestamp_us` là tùy chọn.

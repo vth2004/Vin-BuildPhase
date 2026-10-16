@@ -97,8 +97,6 @@ def upload_dataset(
         elif embedded_annotation:
             raw_annotation = embedded_annotation
 
-        if not raw_annotation and schema_id != FACE_SCHEMA_ID:
-            raise HTTPException(400, "No annotation JSON provided or found inside ZIP")
         if raw_annotation and len(raw_annotation) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "Annotation JSON exceeds 500 MB limit")
 
@@ -115,17 +113,23 @@ def upload_dataset(
                 for name in images
             ]
         else:
-            if raw_annotation and raw_annotation.lstrip().startswith(b"<"):
+            if not raw_annotation:
+                validated = [
+                    {"file_name": name, "width": None, "height": None, "annotations": []}
+                    for name in images
+                ]
+            elif raw_annotation.lstrip().startswith(b"<"):
                 raise HTTPException(
                     400,
                     "File annotation XML này thuộc định dạng Face Landmark (CVAT XML). "
                     "Phân hệ Human Pose chỉ hỗ trợ file JSON COCO 17 điểm. Vui lòng chuyển sang phân hệ Face Landmark.",
                 )
-            try:
-                annotation_payload = json.loads(raw_annotation)
-            except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                raise HTTPException(400, "Annotation file is not valid JSON") from error
-            validated = validate_annotations(annotation_payload, schema, set(images))
+            else:
+                try:
+                    annotation_payload = json.loads(raw_annotation)
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise HTTPException(400, "Annotation file is not valid JSON") from error
+                validated = validate_annotations(annotation_payload, schema, set(images))
 
         validate_exif_orientation(location, validated)
 
