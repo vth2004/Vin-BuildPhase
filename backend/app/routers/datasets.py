@@ -20,6 +20,7 @@ from app.features.face_landmark_vf50.services.ingestion import parse_face_annota
 from app.features.human_pose.services.dataset import load_schema, validate_annotations
 from app.shared.datasets import safe_extract_dataset, validate_exif_orientation
 from app.shared.temporal import infer_sequences, parse_sequence_manifest
+from app.shared.video import VIDEO_EXTENSIONS, VideoDecodeError, decode_video
 
 router = APIRouter(prefix="/api/projects/{project_id}/datasets", tags=["datasets"])
 
@@ -37,7 +38,7 @@ def _sequence_summary(conn: sqlite3.Connection, dataset_id: str) -> dict:
     items = []
     for sequence in sequences:
         frames = conn.execute(
-            """SELECT file_name, original_frame_index, timestamp_us, frame_index_source
+            """SELECT file_name, original_frame_index, timestamp_us, timestamp_source, frame_index_source
                  FROM images WHERE sequence_id = ?
                  ORDER BY original_frame_index, file_name""",
             (sequence["id"],),
@@ -52,6 +53,9 @@ def _sequence_summary(conn: sqlite3.Connection, dataset_id: str) -> dict:
             "fps": sequence["fps"], "fps_source": sequence["fps_source"],
             "sampling_confirmed": bool(sequence["sampling_confirmed"]),
             "requires_manifest": bool(sequence["requires_manifest"]),
+            "video_codec": sequence["video_codec"], "video_width": sequence["video_width"],
+            "video_height": sequence["video_height"], "video_frame_count": sequence["video_frame_count"],
+            "rotation_degrees": sequence["rotation_degrees"],
             "reason": json.loads(sequence["mapping_snapshot_json"] or "{}").get("reason"),
             "frames": [dict(row) for row in frames],
         })
@@ -220,6 +224,92 @@ def upload_dataset(
         }
     except Exception:
         shutil.rmtree(location.parent, ignore_errors=True)
+        raise
+
+
+@router.post("/video", status_code=201)
+def upload_video_dataset(
+    project_id: str,
+    file: Annotated[UploadFile, File(description="MP4, MOV or AVI video")],
+    schema_id: Annotated[str, Form()],
+    _: sqlite3.Row = Depends(project_guard),
+) -> dict:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in VIDEO_EXTENSIONS:
+        raise HTTPException(400, "Upload an MP4, MOV or AVI video")
+    load_schema(schema_id)
+    dataset_id = str(uuid.uuid4())
+    dataset_root = DATA_DIR / "projects" / project_id / "datasets" / dataset_id
+    images_root = dataset_root / "images"
+    media_path = dataset_root / f"source_video{suffix}"
+    dataset_root.mkdir(parents=True, exist_ok=False)
+    try:
+        uploaded_bytes = 0
+        with media_path.open("wb") as target:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                uploaded_bytes += len(chunk)
+                if uploaded_bytes > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "Video exceeds 500 MB limit")
+                target.write(chunk)
+        if not uploaded_bytes:
+            raise HTTPException(400, "Uploaded video is empty")
+        try:
+            decoded = decode_video(media_path, images_root)
+        except VideoDecodeError as error:
+            raise HTTPException(400, str(error)) from error
+
+        now = int(time.time())
+        sequence_id = str(uuid.uuid4())
+        mapping = [{"file_name": frame.file_name, "frame_index": frame.frame_index,
+                    "timestamp_us": frame.timestamp_us, "timestamp_source": frame.timestamp_source}
+                   for frame in decoded.frames]
+        snapshot = {
+            "source": "video_decode", "mapping": mapping, "codec": decoded.codec,
+            "width": decoded.width, "height": decoded.height, "frame_count": len(decoded.frames),
+            "fps": decoded.fps, "rotation_degrees": decoded.rotation_degrees,
+        }
+        with db() as conn:
+            conn.execute(
+                """INSERT INTO datasets
+                     (id, project_id, name, status, image_count, storage_path, schema_id, created_at)
+                   VALUES (?, ?, ?, 'ready', ?, ?, ?, ?)""",
+                (dataset_id, project_id, Path(file.filename or "video").stem, len(decoded.frames),
+                 str(images_root), schema_id, now),
+            )
+            conn.execute(
+                """INSERT INTO sequences (
+                     id, dataset_id, name, source, fps, fps_source, frame_order_source, confirmed_at,
+                     confirmed_project_id, confirmation_source, mapping_snapshot_json, sampling_confirmed,
+                     requires_manifest, import_status, media_path, video_codec, video_width, video_height,
+                     video_frame_count, rotation_degrees, created_at
+                   ) VALUES (?, ?, ?, 'video', ?, ?, 'video_decode', ?, ?, 'video_decode', ?, 0, 0,
+                             'ready', ?, ?, ?, ?, ?, ?, ?)""",
+                (sequence_id, dataset_id, Path(file.filename or "video").stem, decoded.fps,
+                 "video_metadata" if decoded.fps else None, now, project_id,
+                 json.dumps(snapshot, ensure_ascii=False), str(media_path), decoded.codec,
+                 decoded.width, decoded.height, len(decoded.frames), decoded.rotation_degrees, now),
+            )
+            for frame in decoded.frames:
+                conn.execute(
+                    """INSERT INTO images (
+                         id, dataset_id, file_name, width, height, frame_index, sequence_id,
+                         original_frame_index, timestamp_us, timestamp_source, frame_index_source
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'video_decode')""",
+                    (str(uuid.uuid4()), dataset_id, frame.file_name, frame.width, frame.height,
+                     frame.frame_index, sequence_id, frame.frame_index, frame.timestamp_us,
+                     frame.timestamp_source),
+                )
+            summary = _sequence_summary(conn, dataset_id)
+        return {
+            "id": dataset_id, "name": Path(file.filename or "video").stem, "status": "ready",
+            "image_count": len(decoded.frames), "schema_id": schema_id,
+            "sequence_summary": summary,
+        }
+    except Exception:
+        shutil.rmtree(dataset_root, ignore_errors=True)
         raise
 
 

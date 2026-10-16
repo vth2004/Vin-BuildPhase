@@ -1,7 +1,7 @@
 # Kế hoạch bổ sung Temporal QA/QC cho Pose và Face (bản rút gọn v3)
 
 - **Nhánh triển khai:** `dev/hiep-temporal-qa`
-- **Trạng thái:** Phase 6 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
+- **Trạng thái:** Phase 7A hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
 - **Phạm vi:** Human Pose 17 điểm và Face Landmark VF50.
 
 ## 1. Mục tiêu và phạm vi
@@ -376,6 +376,7 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 
 ### Phase 7 — Upload video (L) · Mốc demo 3
 
+- **7A hoàn thành ngày 2026-10-16:** endpoint backend `POST /datasets/video` nhận MP4/MOV/AVI tối đa 500 MB, lưu video gốc và decode tuần tự bằng OpenCV. Mỗi video tạo một sequence đã xác nhận; frame giữ kích thước, original index từ 0, timestamp ưu tiên metadata và fallback FPS. Migration `007_video_ingestion` lưu codec, FPS, kích thước, số frame và rotation. Video hỏng/codec không đọc được/frame đổi kích thước bị từ chối và cleanup, không tạo dataset `ready`. Annotation video thuộc 7B; job nền/quota decoded thuộc 7C.
 - Upload, staging/decode nền, import job/quota/interruption/retry.
 - **Test:** video hỏng; quá quota; lỗi giữa import; restart; rotation; codec lỗi; frame mapping; staging cleanup.
 - **Hoàn thành:** lỗi không tạo dataset `ready`; restart không để job treo; map đúng frame.
