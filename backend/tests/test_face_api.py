@@ -8,6 +8,7 @@ import time
 import unittest
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
@@ -64,7 +65,7 @@ class FaceApiTests(unittest.TestCase):
             patcher.stop()
         self.temp.cleanup()
 
-    def _upload(self) -> str:
+    def _upload(self, annotation: dict | None = None) -> str:
         archive_bytes = io.BytesIO()
         with zipfile.ZipFile(archive_bytes, "w") as archive:
             archive.writestr("frame.jpg", b"not-needed-for-upload-validation")
@@ -74,11 +75,64 @@ class FaceApiTests(unittest.TestCase):
             data={"schema_id": "vf_face_landmark50_v1"},
             files={
                 "file": ("faces.zip", archive_bytes.getvalue(), "application/zip"),
-                "annotation_file": ("annotations.json", json.dumps(annotation_payload()), "application/json"),
+                "annotation_file": ("annotations.json", json.dumps(annotation or annotation_payload()), "application/json"),
             },
         )
         self.assertEqual(201, response.status_code, response.text)
         return response.json()["id"]
+
+    def _seed_temporal_face_run(self, dataset_id: str, annotation_number: int, point_id: int,
+                                selected: tuple[float, float] = (901.0, 902.0)) -> tuple[str, str]:
+        now = int(time.time())
+        with database.db() as conn:
+            annotations = conn.execute(
+                """SELECT a.id, a.image_id, a.keypoints_json FROM annotations a JOIN images i ON i.id = a.image_id
+                   WHERE i.dataset_id = ? ORDER BY a.rowid""", (dataset_id,),
+            ).fetchall()
+            run_id = str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO runs (id, project_id, dataset_id, status, progress, mode, created_at,
+                   temporal_enabled, temporal_window_size, temporal_algorithm_version)
+                   VALUES (?, ?, ?, 'completed', 100, 'face_mediapipe_vf50', ?, 1, 15, 'robust-local-fit-v1')""",
+                (run_id, self.project_id, dataset_id, now),
+            )
+            selected_result = ""
+            for face_index, annotation in enumerate(annotations):
+                human_list = json.loads(annotation["keypoints_json"])
+                human = {str(point["id"]): point for point in human_list}
+                result_id = str(uuid.uuid4())
+                conn.execute(
+                    """INSERT INTO face_frame_results (
+                       id, run_id, image_id, annotation_id, face_index, frame_index, human_keypoints_json,
+                       model_keypoints_json, iod, nme, quality_json, violations_json, severity, error_count,
+                       status, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, 0, ?, ?, 96, 0, '{}', '[]', 0, 0, 'pending', ?, ?)""",
+                    (result_id, run_id, annotation["image_id"], annotation["id"], face_index,
+                     json.dumps(human), json.dumps(human), now, now),
+                )
+                if face_index == annotation_number:
+                    selected_result = result_id
+                    temporal_result_id = str(uuid.uuid4())
+                    point = human[str(point_id)]
+                    conn.execute(
+                        """INSERT INTO temporal_results (
+                           id, run_id, segment_id, internal_track_id, image_id, annotation_id, frame_index,
+                           keypoint_id, human_x, human_y, temporal_x, temporal_y, estimate_status, method,
+                           temporal_quality, support_count, time_source, supporting_model_count, trajectory_json, created_at)
+                           VALUES (?, ?, 0, ?, ?, ?, 0, ?, ?, ?, 901, 902, 'available', 'interpolation',
+                                   0.9, 6, 'frame_index', 1, '[]', ?)""",
+                        (temporal_result_id, run_id, f"face-{face_index}", annotation["image_id"], annotation["id"],
+                         point_id, point.get("x"), point.get("y"), now),
+                    )
+                    conn.execute(
+                        """INSERT INTO temporal_review_decisions (
+                           id, run_id, annotation_id, keypoint_id, temporal_result_id, source, selected_x,
+                           selected_y, temporal_x, temporal_y, reviewed_at, reviewed_project_id)
+                           VALUES (?, ?, ?, ?, ?, 'temporal', ?, ?, 901, 902, ?, ?)""",
+                        (str(uuid.uuid4()), run_id, annotation["id"], point_id, temporal_result_id,
+                         selected[0], selected[1], now, self.project_id),
+                    )
+        return run_id, selected_result
 
     def test_upload_requires_recovery_key(self) -> None:
         response = self.client.post(f"/api/projects/{self.project_id}/datasets")
@@ -148,6 +202,51 @@ class FaceApiTests(unittest.TestCase):
         with database.db() as conn:
             source_after = conn.execute("SELECT keypoints_json FROM annotations WHERE id = ?", (annotation["id"],)).fetchone()[0]
         self.assertEqual(source_before, source_after)
+
+    def test_temporal_review_exports_correct_face_and_preserves_occlusion(self) -> None:
+        payload = annotation_payload()
+        first = payload["images"][0]["annotations"][0]
+        second = json.loads(json.dumps(first))
+        second["keypoints"][0].update({"x": 500.0, "y": 600.0, "state": "occluded"})
+        payload["images"][0]["annotations"].append(second)
+        dataset_id = self._upload(payload)
+        run_id, _ = self._seed_temporal_face_run(dataset_id, 1, 0)
+
+        cleaned = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/face/export/cleaned-json", headers=self.headers,
+        )
+        self.assertEqual(200, cleaned.status_code, cleaned.text)
+        faces = cleaned.json()["images"][0]["annotations"]
+        self.assertEqual(100.0, faces[0]["keypoints"][0]["x"])
+        self.assertEqual([901.0, 902.0, "occluded", "temporal"], [
+            faces[1]["keypoints"][0]["x"], faces[1]["keypoints"][0]["y"],
+            faces[1]["keypoints"][0]["state"], faces[1]["keypoints"][0]["source"],
+        ])
+        xml_response = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/face/export/cvat-xml", headers=self.headers,
+        )
+        self.assertEqual(200, xml_response.status_code, xml_response.text)
+        root = ET.fromstring(xml_response.content)
+        face_two_point = root.findall(".//skeleton[@group_id='1']/points[@label='0']")[0]
+        self.assertEqual("901.00,902.00", face_two_point.attrib["points"])
+        self.assertEqual("1", face_two_point.attrib["occluded"])
+        with database.db() as conn:
+            stored = conn.execute(
+                "SELECT keypoints_json FROM annotations a JOIN images i ON i.id = a.image_id WHERE i.dataset_id = ? ORDER BY a.rowid LIMIT 1 OFFSET 1",
+                (dataset_id,),
+            ).fetchone()[0]
+        self.assertEqual(500.0, json.loads(stored)[0]["x"])
+
+    def test_temporal_face_export_rejects_outside(self) -> None:
+        payload = annotation_payload()
+        payload["images"][0]["annotations"][0]["keypoints"][0].update({"x": None, "y": None, "state": "outside"})
+        dataset_id = self._upload(payload)
+        run_id, _ = self._seed_temporal_face_run(dataset_id, 0, 0)
+        response = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/face/export/cleaned-json", headers=self.headers,
+        )
+        self.assertEqual(409, response.status_code)
+        self.assertEqual("outside keypoints cannot be replaced", response.json()["detail"]["skipped"][0]["reason"])
 
 
 if __name__ == "__main__":

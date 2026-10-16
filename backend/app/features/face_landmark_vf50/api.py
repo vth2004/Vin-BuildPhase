@@ -391,6 +391,37 @@ def _export_results(project_id: str, run_id: str) -> tuple[sqlite3.Row, list[dic
             (run_id,),
         ).fetchall()
         results = [_result_detail(conn, row) for row in rows]
+        decisions = conn.execute(
+            """SELECT d.id, d.annotation_id, d.keypoint_id, d.source, d.selected_x, d.selected_y
+               FROM temporal_review_decisions d
+               JOIN annotations a ON a.id = d.annotation_id
+               JOIN images i ON i.id = a.image_id AND i.dataset_id = ?
+               WHERE d.run_id = ? ORDER BY d.reviewed_at, d.id""",
+            (run["dataset_id"], run_id),
+        ).fetchall()
+    by_annotation = {result.get("annotation_id"): result for result in results if result.get("annotation_id")}
+    skipped = []
+    for decision in decisions:
+        result = by_annotation.get(decision["annotation_id"])
+        detail = {"review_id": decision["id"], "annotation_id": decision["annotation_id"],
+                  "keypoint_id": decision["keypoint_id"]}
+        if result is None:
+            skipped.append({**detail, "reason": "annotation is not mapped to a Face result"})
+            continue
+        point = result["reviewed_keypoints"].get(decision["keypoint_id"])
+        if point is None:
+            skipped.append({**detail, "reason": "Face result lacks keypoint"})
+            continue
+        if point.get("state") == "outside" or point.get("x") is None or point.get("y") is None:
+            skipped.append({**detail, "reason": "outside keypoints cannot be replaced"})
+            continue
+        point["x"] = decision["selected_x"]
+        point["y"] = decision["selected_y"]
+        point["source"] = decision["source"]
+    if skipped:
+        raise HTTPException(409, detail={"message": "Face export could not apply every temporal review.",
+                                         "requested": len(decisions), "applied": len(decisions) - len(skipped),
+                                         "skipped": skipped})
     return run, results
 
 

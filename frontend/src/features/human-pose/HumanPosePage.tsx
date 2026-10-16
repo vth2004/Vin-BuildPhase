@@ -850,6 +850,13 @@ export default function HumanPosePage() {
         </section>
       )}
       {runId && activeTemporal && activeDatasetId && <TemporalPanel session={session} runId={runId} datasetId={activeDatasetId} />}
+      {runId && activeTemporal && warnings.length === 0 && (
+        <section>
+          <h2>Export Pose đã review</h2>
+          <p style={{ color: '#64748b', fontSize: '0.84rem' }}>Export áp dụng các lựa chọn Human/Temporal đã lưu vào đúng instance.</p>
+          <button className="btn-export" onClick={exportCleaned}>📥 Xuất File Annotation đã sửa (JSON)</button>
+        </section>
+      )}
     </main>
   )
 }

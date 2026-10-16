@@ -1,7 +1,7 @@
 # Kế hoạch bổ sung Temporal QA/QC cho Pose và Face (bản rút gọn v3)
 
 - **Nhánh triển khai:** `dev/hiep-temporal-qa`
-- **Trạng thái:** Phase 5 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
+- **Trạng thái:** Phase 6 hoàn thành ngày 2026-10-16; Q1–Q2 là quyết định tạm thời của nhóm, chờ mentor xác nhận.
 - **Phạm vi:** Human Pose 17 điểm và Face Landmark VF50.
 
 ## 1. Mục tiêu và phạm vi
@@ -368,6 +368,8 @@ Mỗi phase chạy regression suite hiện có và test của phase. S/M/L là �
 - **6A hoàn thành ngày 2026-10-16:** migration `006_temporal_reviews` có backup và chạy lại an toàn; API `GET /reviews`, `PUT/DELETE /results/{result_id}/review`; lưu lựa chọn Human/Temporal cùng tọa độ snapshot theo run, annotation và keypoint. Summary đếm quyết định. Chặn result sai run/project, estimate không khả dụng và điểm `outside`.
 - **6B hoàn thành ngày 2026-10-16:** panel Pose/Face cho chọn, đổi hoặc bỏ lựa chọn từng điểm; reload khôi phục quyết định; danh sách có badge và lọc theo trạng thái review; summary tách số điểm dùng Temporal và giữ Human. Nút Temporal chỉ bật khi estimate hợp lệ và điểm gắn với annotation.
 - **6C hoàn thành ngày 2026-10-16:** export Pose COCO và `landmark-qa/v1` áp dụng decision như lớp cuối theo đúng annotation/keypoint, giữ visibility và từ chối điểm `outside`; annotation nguồn không đổi. Audit JSON/CSV chứa Human, raw model, Temporal, tọa độ được chọn, track và provenance; panel có nút tải báo cáo.
+- **6D hoàn thành ngày 2026-10-16:** cleaned JSON và CVAT XML của Face áp dụng decision theo annotation/keypoint, không dựa vào `face_index`; giữ trạng thái visibility, từ chối `outside` và không sửa annotation nguồn. CSV/checklist vẫn là báo cáo QA, audit Temporal dùng endpoint JSON/CSV chung.
+- **6E hoàn thành ngày 2026-10-16:** nghiệm thu API review → reload → export trên cùng run, regression toàn bộ backend và frontend build; Pose vẫn export được khi run không có spatial warning. Quickstart đã cập nhật cho mốc demo 2.
 - Chọn/đổi/bỏ temporal; lưu decision; export coordinate và audit report.
 - **Test:** đúng keypoint/instance; giữ visibility; không tạo `outside`; export khớp decision/provenance.
 - **Hoàn thành:** review và export đúng instance.

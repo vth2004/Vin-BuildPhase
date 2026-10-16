@@ -238,7 +238,18 @@ class PoseExportAndExifTests(unittest.TestCase):
     def test_temporal_coco_export_updates_exact_instance_and_preserves_visibility(self) -> None:
         source = coco_payload()
         dataset_id = self.upload("vf_humanpose17_v1", source)
-        run_id, _ = self.add_temporal_review(dataset_id, 1, 3)
+        run_id, result_id = self.add_temporal_review(dataset_id, 1, 3)
+        with database.db() as conn:
+            conn.execute("DELETE FROM temporal_review_decisions WHERE run_id = ?", (run_id,))
+        reviewed = self.client.put(
+            f"/api/projects/{self.project_id}/runs/{run_id}/temporal/results/{result_id}/review",
+            headers={**self.headers, "Content-Type": "application/json"}, json={"source": "temporal"},
+        )
+        self.assertEqual(200, reviewed.status_code, reviewed.text)
+        reloaded = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/temporal/reviews", headers=self.headers,
+        )
+        self.assertEqual("temporal", reloaded.json()["items"][0]["source"])
         exported = self.export(run_id)
         self.assertEqual(200, exported.status_code, exported.text)
         first, second = exported.json()["annotations"]
