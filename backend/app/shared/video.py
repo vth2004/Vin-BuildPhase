@@ -124,7 +124,13 @@ def _codec_name(fourcc: float) -> str:
         return "unknown"
 
 
-def decode_video(source: Path, output_dir: Path) -> VideoDecodeResult:
+def decode_video(
+    source: Path,
+    output_dir: Path,
+    *,
+    max_frames: int | None = None,
+    max_decoded_bytes: int | None = None,
+) -> VideoDecodeResult:
     capture = cv2.VideoCapture(str(source))
     if not capture.isOpened():
         capture.release()
@@ -142,6 +148,7 @@ def decode_video(source: Path, output_dir: Path) -> VideoDecodeResult:
     output_dir.mkdir(parents=True, exist_ok=False)
     decoded: list[tuple[str, int, float, int, int]] = []
     expected_size: tuple[int, int] | None = None
+    decoded_bytes = 0
     try:
         frame_index = 0
         while True:
@@ -161,6 +168,11 @@ def decode_video(source: Path, output_dir: Path) -> VideoDecodeResult:
                     f"expected {expected_size[0]}x{expected_size[1]}, got {width}x{height}"
                 )
             file_name = f"frame_{frame_index:06d}.jpg"
+            if max_frames is not None and frame_index >= max_frames:
+                raise VideoDecodeError(f"Video exceeds decoded frame quota ({max_frames})")
+            decoded_bytes += int(frame.nbytes)
+            if max_decoded_bytes is not None and decoded_bytes > max_decoded_bytes:
+                raise VideoDecodeError(f"Video exceeds decoded storage quota ({max_decoded_bytes} bytes)")
             success, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
             if not success:
                 raise VideoDecodeError(f"Could not encode decoded frame {frame_index}")

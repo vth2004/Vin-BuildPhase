@@ -22,6 +22,7 @@ from app.core import database
 from app.main import app
 from app.routers import datasets as datasets_router
 from app.shared.video import VideoDecodeError, decode_video
+from app.shared.video_import import recover_interrupted_video_imports
 
 
 def small_avi(directory: Path, frame_count: int = 4) -> bytes:
@@ -69,12 +70,19 @@ class VideoIngestionApiTests(unittest.TestCase):
             data={"schema_id": "vf_humanpose17_v1"},
             files={"file": ("walk.avi", small_avi(self.root), "video/x-msvideo")},
         )
-        self.assertEqual(201, response.status_code, response.text)
+        self.assertEqual(202, response.status_code, response.text)
         payload = response.json()
-        self.assertEqual("ready", payload["status"])
-        self.assertEqual(4, payload["image_count"])
-        self.assertTrue(payload["sequence_summary"]["temporal_ready"])
-        sequence = payload["sequence_summary"]["sequences"][0]
+        self.assertEqual("processing", payload["status"])
+        job = self.client.get(
+            f"/api/projects/{self.project_id}/datasets/{payload['id']}/import", headers=self.headers,
+        ).json()
+        self.assertEqual("ready", job["job"]["status"])
+        self.assertEqual(100, job["job"]["progress"])
+        summary = self.client.get(
+            f"/api/projects/{self.project_id}/datasets/{payload['id']}/sequences", headers=self.headers,
+        ).json()
+        self.assertTrue(summary["temporal_ready"])
+        sequence = summary["sequences"][0]
         self.assertEqual("video", sequence["source"])
         self.assertEqual("video_decode", sequence["frame_order_source"])
         self.assertEqual([1, 1, 1], sequence["frame_deltas"])
@@ -102,7 +110,11 @@ class VideoIngestionApiTests(unittest.TestCase):
             data={"schema_id": "vf_face_landmark50_v1"},
             files={"file": ("broken.mp4", b"not a video", "video/mp4")},
         )
-        self.assertEqual(400, corrupt.status_code)
+        self.assertEqual(202, corrupt.status_code)
+        corrupt_job = self.client.get(
+            f"/api/projects/{self.project_id}/datasets/{corrupt.json()['id']}/import", headers=self.headers,
+        ).json()
+        self.assertEqual("failed", corrupt_job["job"]["status"])
         unsupported = self.client.post(
             f"/api/projects/{self.project_id}/datasets/video", headers=self.headers,
             data={"schema_id": "vf_face_landmark50_v1"},
@@ -110,7 +122,7 @@ class VideoIngestionApiTests(unittest.TestCase):
         )
         self.assertEqual(400, unsupported.status_code)
         with database.db() as conn:
-            self.assertEqual(0, conn.execute("SELECT COUNT(*) FROM datasets WHERE project_id = ?", (self.project_id,)).fetchone()[0])
+            self.assertEqual(1, conn.execute("SELECT COUNT(*) FROM datasets WHERE project_id = ?", (self.project_id,)).fetchone()[0])
 
     def test_pose_annotation_maps_by_explicit_original_frame_index(self) -> None:
         points = [
@@ -132,9 +144,8 @@ class VideoIngestionApiTests(unittest.TestCase):
                 "annotation_file": ("pose.json", json.dumps(annotation).encode(), "application/json"),
             },
         )
-        self.assertEqual(201, response.status_code, response.text)
+        self.assertEqual(202, response.status_code, response.text)
         payload = response.json()
-        self.assertEqual(1, payload["annotation_count"])
         with database.db() as conn:
             row = conn.execute(
                 """SELECT i.original_frame_index, a.source_instance_id, a.source_track_id
@@ -167,8 +178,7 @@ class VideoIngestionApiTests(unittest.TestCase):
                 "annotation_file": ("face.json", json.dumps(annotation).encode(), "application/json"),
             },
         )
-        self.assertEqual(201, response.status_code, response.text)
-        self.assertEqual(1, response.json()["annotation_count"])
+        self.assertEqual(202, response.status_code, response.text)
         with database.db() as conn:
             frame = conn.execute(
                 """SELECT i.original_frame_index FROM annotations a JOIN images i ON i.id = a.image_id
@@ -192,11 +202,95 @@ class VideoIngestionApiTests(unittest.TestCase):
                     "annotation_file": ("face.json", json.dumps(annotation).encode(), "application/json"),
                 },
             )
-            self.assertEqual(400, response.status_code, response.text)
+            self.assertEqual(202, response.status_code, response.text)
+            job = self.client.get(
+                f"/api/projects/{self.project_id}/datasets/{response.json()['id']}/import", headers=self.headers,
+            ).json()
+            self.assertEqual("failed", job["job"]["status"])
         with database.db() as conn:
-            self.assertEqual(0, conn.execute(
+            self.assertEqual(2, conn.execute(
                 "SELECT COUNT(*) FROM datasets WHERE project_id = ?", (self.project_id,),
             ).fetchone()[0])
+
+    def test_decoded_frame_quota_fails_and_cleans_staging(self) -> None:
+        with patch.object(datasets_router, "MAX_VIDEO_FRAMES", 2):
+            response = self.client.post(
+                f"/api/projects/{self.project_id}/datasets/video", headers=self.headers,
+                data={"schema_id": "vf_humanpose17_v1"},
+                files={"file": ("walk.avi", small_avi(self.root), "video/x-msvideo")},
+            )
+        self.assertEqual(202, response.status_code, response.text)
+        payload = self.client.get(
+            f"/api/projects/{self.project_id}/datasets/{response.json()['id']}/import", headers=self.headers,
+        ).json()
+        self.assertEqual("failed", payload["job"]["status"])
+        self.assertIn("frame quota", payload["job"]["error_message"])
+        with database.db() as conn:
+            storage = Path(conn.execute(
+                "SELECT storage_path FROM datasets WHERE id = ?", (response.json()["id"],),
+            ).fetchone()[0])
+            staging = Path(conn.execute(
+                "SELECT staging_path FROM video_import_jobs WHERE dataset_id = ?", (response.json()["id"],),
+            ).fetchone()[0])
+        self.assertFalse(storage.exists())
+        self.assertFalse(staging.exists())
+
+    def test_failed_import_can_retry_as_new_attempt(self) -> None:
+        response = self.client.post(
+            f"/api/projects/{self.project_id}/datasets/video", headers=self.headers,
+            data={"schema_id": "vf_face_landmark50_v1"},
+            files={"file": ("broken.avi", b"broken", "video/x-msvideo")},
+        )
+        dataset_id = response.json()["id"]
+        with database.db() as conn:
+            storage = Path(conn.execute(
+                "SELECT storage_path FROM datasets WHERE id = ?", (dataset_id,),
+            ).fetchone()[0])
+        (storage.parent / "source_video.avi").write_bytes(small_avi(self.root))
+        retry = self.client.post(
+            f"/api/projects/{self.project_id}/datasets/{dataset_id}/import/retry", headers=self.headers,
+        )
+        self.assertEqual(202, retry.status_code, retry.text)
+        self.assertEqual(2, retry.json()["attempt"])
+        status = self.client.get(
+            f"/api/projects/{self.project_id}/datasets/{dataset_id}/import", headers=self.headers,
+        ).json()
+        self.assertEqual("ready", status["job"]["status"])
+        with database.db() as conn:
+            attempts = conn.execute(
+                "SELECT attempt, status FROM video_import_jobs WHERE dataset_id = ? ORDER BY attempt", (dataset_id,),
+            ).fetchall()
+        self.assertEqual([(1, "failed"), (2, "ready")], [tuple(row) for row in attempts])
+
+    def test_startup_recovery_marks_pending_and_processing_jobs_interrupted(self) -> None:
+        for attempt, status in enumerate(("pending", "processing"), start=1):
+            dataset_id = str(attempt)
+            staging = self.root / f"staging-{attempt}"
+            staging.mkdir()
+            with database.db() as conn:
+                conn.execute(
+                    """INSERT INTO datasets
+                         (id, project_id, name, status, image_count, storage_path, schema_id, created_at)
+                       VALUES (?, ?, ?, 'processing', 0, ?, 'vf_humanpose17_v1', 1)""",
+                    (dataset_id, self.project_id, f"video-{attempt}", str(self.root / f"images-{attempt}")),
+                )
+                conn.execute(
+                    """INSERT INTO video_import_jobs
+                         (id, dataset_id, attempt, status, progress, staging_path, max_frames,
+                          max_decoded_bytes, created_at)
+                       VALUES (?, ?, 1, ?, 10, ?, 10, 1000, 1)""",
+                    (f"job-{attempt}", dataset_id, status, str(staging)),
+                )
+        self.assertEqual(2, recover_interrupted_video_imports())
+        with database.db() as conn:
+            jobs = conn.execute("SELECT status FROM video_import_jobs ORDER BY id").fetchall()
+            datasets = conn.execute(
+                "SELECT status FROM datasets WHERE id IN ('1', '2') ORDER BY id"
+            ).fetchall()
+        self.assertEqual(["interrupted", "interrupted"], [row[0] for row in jobs])
+        self.assertEqual(["interrupted", "interrupted"], [row[0] for row in datasets])
+        self.assertFalse((self.root / "staging-1").exists())
+        self.assertFalse((self.root / "staging-2").exists())
 
 
 class VideoDecoderTests(unittest.TestCase):
@@ -245,6 +339,16 @@ class VideoDecoderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch("app.shared.video.cv2.VideoCapture", return_value=capture):
             with self.assertRaisesRegex(VideoDecodeError, "size changed"):
                 decode_video(Path(directory) / "input.mov", Path(directory) / "frames")
+        self.assertTrue(capture.released)
+
+    def test_decoded_pixel_byte_quota_is_enforced(self) -> None:
+        capture = self.Capture([np.zeros((20, 30, 3), dtype=np.uint8)])
+        with tempfile.TemporaryDirectory() as directory, patch("app.shared.video.cv2.VideoCapture", return_value=capture):
+            with self.assertRaisesRegex(VideoDecodeError, "storage quota"):
+                decode_video(
+                    Path(directory) / "input.mov", Path(directory) / "frames",
+                    max_decoded_bytes=20 * 30 * 3 - 1,
+                )
         self.assertTrue(capture.released)
 
 

@@ -10,6 +10,8 @@ DB_PATH = DATA_DIR / "landmark_qa.sqlite3"
 
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 MAX_FILES_PER_ZIP = 10_000
+MAX_VIDEO_FRAMES = int(os.getenv("MAX_VIDEO_FRAMES", "10000"))
+MAX_DECODED_VIDEO_BYTES = int(os.getenv("MAX_DECODED_VIDEO_BYTES", str(5 * 1024 * 1024 * 1024)))
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 CORS_ORIGINS = [

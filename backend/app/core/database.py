@@ -16,6 +16,7 @@ TEMPORAL_TRACKING_MIGRATION = "004_temporal_tracking"
 TEMPORAL_RESULTS_MIGRATION = "005_temporal_results"
 TEMPORAL_REVIEWS_MIGRATION = "006_temporal_reviews"
 VIDEO_INGESTION_MIGRATION = "007_video_ingestion"
+VIDEO_IMPORT_JOBS_MIGRATION = "008_video_import_jobs"
 
 
 @contextmanager
@@ -74,7 +75,7 @@ def _backup_database_before_migration(version: str = FACE_MIGRATION) -> None:
 
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    for version in (FACE_MIGRATION, FACE_MIGRATION_V2, TEMPORAL_METADATA_MIGRATION, TEMPORAL_TRACKING_MIGRATION, TEMPORAL_RESULTS_MIGRATION, TEMPORAL_REVIEWS_MIGRATION, VIDEO_INGESTION_MIGRATION):
+    for version in (FACE_MIGRATION, FACE_MIGRATION_V2, TEMPORAL_METADATA_MIGRATION, TEMPORAL_TRACKING_MIGRATION, TEMPORAL_RESULTS_MIGRATION, TEMPORAL_REVIEWS_MIGRATION, VIDEO_INGESTION_MIGRATION, VIDEO_IMPORT_JOBS_MIGRATION):
         if _needs_migration(version):
             _backup_database_before_migration(version)
             break
@@ -220,6 +221,16 @@ def init_db() -> None:
           ON temporal_results(run_id, sequence_id, internal_track_id, frame_index, keypoint_id);
         CREATE INDEX IF NOT EXISTS idx_temporal_results_status
           ON temporal_results(run_id, estimate_status, evidence);
+        CREATE TABLE IF NOT EXISTS video_import_jobs (
+          id TEXT PRIMARY KEY, dataset_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+          status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0,
+          error_message TEXT, staging_path TEXT NOT NULL,
+          max_frames INTEGER NOT NULL, max_decoded_bytes INTEGER NOT NULL,
+          created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER,
+          UNIQUE(dataset_id, attempt)
+        );
+        CREATE INDEX IF NOT EXISTS idx_video_import_jobs_dataset
+          ON video_import_jobs(dataset_id, attempt DESC);
         """)
         sequence_columns = _column_names(conn, "sequences")
         for column, definition in (
@@ -448,4 +459,8 @@ def init_db() -> None:
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
             (VIDEO_INGESTION_MIGRATION, int(time.time())),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (VIDEO_IMPORT_JOBS_MIGRATION, int(time.time())),
         )

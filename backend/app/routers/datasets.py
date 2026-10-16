@@ -8,11 +8,13 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.core.config import DATA_DIR, IMAGE_EXTENSIONS, MAX_UPLOAD_BYTES
+from app.core.config import (
+    DATA_DIR, IMAGE_EXTENSIONS, MAX_DECODED_VIDEO_BYTES, MAX_UPLOAD_BYTES, MAX_VIDEO_FRAMES,
+)
 from app.core.database import db
 from app.core.security import project_guard
 from app.features.face_landmark_vf50 import SCHEMA_ID as FACE_SCHEMA_ID
@@ -20,10 +22,8 @@ from app.features.face_landmark_vf50.services.ingestion import parse_face_annota
 from app.features.human_pose.services.dataset import load_schema, validate_annotations
 from app.shared.datasets import safe_extract_dataset, validate_exif_orientation
 from app.shared.temporal import infer_sequences, parse_sequence_manifest
-from app.shared.video import (
-    VIDEO_EXTENSIONS, VideoAnnotationError, VideoDecodeError, decode_video,
-    prepare_video_annotation,
-)
+from app.shared.video import VIDEO_EXTENSIONS
+from app.shared.video_import import execute_video_import
 
 router = APIRouter(prefix="/api/projects/{project_id}/datasets", tags=["datasets"])
 
@@ -230,9 +230,10 @@ def upload_dataset(
         raise
 
 
-@router.post("/video", status_code=201)
+@router.post("/video", status_code=202)
 def upload_video_dataset(
     project_id: str,
+    background: BackgroundTasks,
     file: Annotated[UploadFile, File(description="MP4, MOV or AVI video")],
     schema_id: Annotated[str, Form()],
     annotation_file: Annotated[UploadFile | None, File(
@@ -245,9 +246,11 @@ def upload_video_dataset(
         raise HTTPException(400, "Upload an MP4, MOV or AVI video")
     load_schema(schema_id)
     dataset_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
     dataset_root = DATA_DIR / "projects" / project_id / "datasets" / dataset_id
     images_root = dataset_root / "images"
     media_path = dataset_root / f"source_video{suffix}"
+    staging_path = dataset_root / "staging" / "attempt-1"
     dataset_root.mkdir(parents=True, exist_ok=False)
     try:
         uploaded_bytes = 0
@@ -262,34 +265,13 @@ def upload_video_dataset(
                 target.write(chunk)
         if not uploaded_bytes:
             raise HTTPException(400, "Uploaded video is empty")
-        try:
-            decoded = decode_video(media_path, images_root)
-        except VideoDecodeError as error:
-            raise HTTPException(400, str(error)) from error
-
         raw_annotation = None
-        validated: list[dict] = []
         if annotation_file and annotation_file.filename:
             raw_annotation = annotation_file.file.read(MAX_UPLOAD_BYTES + 1)
             if len(raw_annotation) > MAX_UPLOAD_BYTES:
                 raise HTTPException(413, "Annotation file exceeds 500 MB limit")
             if not raw_annotation:
                 raise HTTPException(400, "Annotation file is empty")
-            try:
-                normalized_annotation = prepare_video_annotation(raw_annotation, len(decoded.frames))
-            except VideoAnnotationError as error:
-                raise HTTPException(400, str(error)) from error
-            image_names = {frame.file_name for frame in decoded.frames}
-            if schema_id == FACE_SCHEMA_ID:
-                validated = parse_face_annotations(normalized_annotation, image_names)
-            else:
-                if normalized_annotation.lstrip().startswith(b"<"):
-                    raise HTTPException(400, "Human Pose video annotations must use a supported JSON format")
-                try:
-                    annotation_payload = json.loads(normalized_annotation)
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise HTTPException(400, "Annotation file is not valid JSON") from error
-                validated = validate_annotations(annotation_payload, load_schema(schema_id), image_names)
 
         annotation_path = None
         if raw_annotation:
@@ -298,67 +280,87 @@ def upload_video_dataset(
             annotation_path.write_bytes(raw_annotation)
 
         now = int(time.time())
-        sequence_id = str(uuid.uuid4())
-        mapping = [{"file_name": frame.file_name, "frame_index": frame.frame_index,
-                    "timestamp_us": frame.timestamp_us, "timestamp_source": frame.timestamp_source}
-                   for frame in decoded.frames]
-        snapshot = {
-            "source": "video_decode", "mapping": mapping, "codec": decoded.codec,
-            "width": decoded.width, "height": decoded.height, "frame_count": len(decoded.frames),
-            "fps": decoded.fps, "rotation_degrees": decoded.rotation_degrees,
-        }
         with db() as conn:
             conn.execute(
                 """INSERT INTO datasets
                      (id, project_id, name, status, image_count, storage_path, schema_id, annotation_path, created_at)
-                   VALUES (?, ?, ?, 'ready', ?, ?, ?, ?, ?)""",
-                (dataset_id, project_id, Path(file.filename or "video").stem, len(decoded.frames),
+                   VALUES (?, ?, ?, 'processing', 0, ?, ?, ?, ?)""",
+                (dataset_id, project_id, Path(file.filename or "video").stem,
                  str(images_root), schema_id, str(annotation_path) if annotation_path else None, now),
             )
             conn.execute(
-                """INSERT INTO sequences (
-                     id, dataset_id, name, source, fps, fps_source, frame_order_source, confirmed_at,
-                     confirmed_project_id, confirmation_source, mapping_snapshot_json, sampling_confirmed,
-                     requires_manifest, import_status, media_path, video_codec, video_width, video_height,
-                     video_frame_count, rotation_degrees, created_at
-                   ) VALUES (?, ?, ?, 'video', ?, ?, 'video_decode', ?, ?, 'video_decode', ?, 0, 0,
-                             'ready', ?, ?, ?, ?, ?, ?, ?)""",
-                (sequence_id, dataset_id, Path(file.filename or "video").stem, decoded.fps,
-                 "video_metadata" if decoded.fps else None, now, project_id,
-                 json.dumps(snapshot, ensure_ascii=False), str(media_path), decoded.codec,
-                 decoded.width, decoded.height, len(decoded.frames), decoded.rotation_degrees, now),
+                """INSERT INTO video_import_jobs (
+                     id, dataset_id, attempt, status, progress, staging_path,
+                     max_frames, max_decoded_bytes, created_at
+                   ) VALUES (?, ?, 1, 'pending', 0, ?, ?, ?, ?)""",
+                (job_id, dataset_id, str(staging_path), MAX_VIDEO_FRAMES, MAX_DECODED_VIDEO_BYTES, now),
             )
-            records_by_name = {record["file_name"]: record for record in validated}
-            for frame in decoded.frames:
-                image_id = str(uuid.uuid4())
-                conn.execute(
-                    """INSERT INTO images (
-                         id, dataset_id, file_name, width, height, frame_index, sequence_id,
-                         original_frame_index, timestamp_us, timestamp_source, frame_index_source
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'video_decode')""",
-                    (image_id, dataset_id, frame.file_name, frame.width, frame.height,
-                     frame.frame_index, sequence_id, frame.frame_index, frame.timestamp_us,
-                     frame.timestamp_source),
-                )
-                for annotation in records_by_name.get(frame.file_name, {}).get("annotations", []):
-                    conn.execute(
-                        """INSERT INTO annotations (
-                             id, image_id, label, keypoints_json, source_instance_id, source_track_id
-                           ) VALUES (?, ?, ?, ?, ?, ?)""",
-                        (str(uuid.uuid4()), image_id, annotation["label"],
-                         json.dumps(annotation["keypoints"]), annotation.get("source_instance_id"),
-                         annotation.get("source_track_id")),
-                    )
-            summary = _sequence_summary(conn, dataset_id)
+        background.add_task(execute_video_import, job_id)
         return {
-            "id": dataset_id, "name": Path(file.filename or "video").stem, "status": "ready",
-            "image_count": len(decoded.frames), "schema_id": schema_id,
-            "annotation_count": sum(len(record.get("annotations", [])) for record in validated),
-            "sequence_summary": summary,
+            "id": dataset_id, "name": Path(file.filename or "video").stem, "status": "processing",
+            "image_count": 0, "schema_id": schema_id, "import_job_id": job_id,
         }
     except Exception:
         shutil.rmtree(dataset_root, ignore_errors=True)
         raise
+
+
+@router.get("/{dataset_id}/import")
+def get_video_import(
+    project_id: str, dataset_id: str, _: sqlite3.Row = Depends(project_guard),
+) -> dict:
+    with db() as conn:
+        dataset = conn.execute(
+            "SELECT id, status, image_count FROM datasets WHERE id = ? AND project_id = ?",
+            (dataset_id, project_id),
+        ).fetchone()
+        if not dataset:
+            raise HTTPException(404, "Dataset not found")
+        job = conn.execute(
+            """SELECT id, attempt, status, progress, error_message, max_frames, max_decoded_bytes,
+                      created_at, started_at, finished_at
+                 FROM video_import_jobs WHERE dataset_id = ? ORDER BY attempt DESC LIMIT 1""",
+            (dataset_id,),
+        ).fetchone()
+        if not job:
+            raise HTTPException(404, "Video import job not found")
+    return {"dataset": dict(dataset), "job": dict(job)}
+
+
+@router.post("/{dataset_id}/import/retry", status_code=202)
+def retry_video_import(
+    project_id: str, dataset_id: str, background: BackgroundTasks,
+    _: sqlite3.Row = Depends(project_guard),
+) -> dict:
+    with db() as conn:
+        dataset = conn.execute(
+            "SELECT id, status, storage_path FROM datasets WHERE id = ? AND project_id = ?",
+            (dataset_id, project_id),
+        ).fetchone()
+        if not dataset:
+            raise HTTPException(404, "Dataset not found")
+        if dataset["status"] not in {"failed", "interrupted"}:
+            raise HTTPException(409, "Only failed or interrupted video imports can be retried")
+        previous = conn.execute(
+            "SELECT attempt, max_frames, max_decoded_bytes FROM video_import_jobs WHERE dataset_id = ? ORDER BY attempt DESC LIMIT 1",
+            (dataset_id,),
+        ).fetchone()
+        if not previous:
+            raise HTTPException(404, "Video import job not found")
+        attempt = previous["attempt"] + 1
+        job_id = str(uuid.uuid4())
+        staging_path = Path(dataset["storage_path"]).parent / "staging" / f"attempt-{attempt}"
+        conn.execute("UPDATE datasets SET status = 'processing', image_count = 0 WHERE id = ?", (dataset_id,))
+        conn.execute(
+            """INSERT INTO video_import_jobs (
+                 id, dataset_id, attempt, status, progress, staging_path,
+                 max_frames, max_decoded_bytes, created_at
+               ) VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)""",
+            (job_id, dataset_id, attempt, str(staging_path), previous["max_frames"],
+             previous["max_decoded_bytes"], int(time.time())),
+        )
+    background.add_task(execute_video_import, job_id)
+    return {"dataset_id": dataset_id, "import_job_id": job_id, "attempt": attempt, "status": "processing"}
 
 
 @router.get("/{dataset_id}/sequences")

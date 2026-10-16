@@ -52,11 +52,13 @@ def create_run(
 ) -> dict:
     with db() as conn:
         dataset = conn.execute(
-            "SELECT id, schema_id FROM datasets WHERE id = ? AND project_id = ?",
+            "SELECT id, schema_id, status FROM datasets WHERE id = ? AND project_id = ?",
             (dataset_id, project_id),
         ).fetchone()
         if not dataset:
             raise HTTPException(404, "Dataset not found")
+        if dataset["status"] != "ready":
+            raise HTTPException(409, f"Dataset is not ready (status: {dataset['status']})")
         try:
             validate_window_size(window_size)
         except ValueError as error:
