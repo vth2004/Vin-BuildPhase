@@ -58,6 +58,18 @@ part_nghia/
 *.tar.gz
 *.7z
 
+# ============ Video & media lớn (KHÔNG push lên GitHub) ============
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.wmv
+*.flv
+*.m4v
+*.mpg
+*.mpeg
+
 # ============ Frontend ============
 node_modules/
 frontend/node_modules/
