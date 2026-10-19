@@ -17,9 +17,9 @@ import time
 import uuid
 import sqlite3
 from app.core.database import db, init_db
-from app.services.dataset_service import load_schema
-from app.services.scoring import run_scoring
-from app.services.ensemble import clear_prediction_cache
+from app.shared.datasets.schemas import load_schema
+from app.features.human_pose.services.scoring import run_scoring
+from app.features.human_pose.services.ensemble import clear_prediction_cache
 
 
 def run_benchmark_on_humanpose1():

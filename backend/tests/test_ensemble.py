@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import unittest
-from app.services.ensemble import (
+from app.features.human_pose.services.ensemble import (
     compute_reference_point,
     compute_disagreement,
     compute_oks_suspicion,

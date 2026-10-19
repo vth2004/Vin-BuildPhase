@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 import json
-import shutil
-import zipfile
-from pathlib import Path, PurePosixPath
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException
 
-from app.core.config import MAX_UPLOAD_BYTES, MAX_FILES_PER_ZIP, IMAGE_EXTENSIONS
-from app.shared.datasets.schemas import load_schema
 from ..adapters.yolo_pose import COCO_TO_VF17
 
 
@@ -196,41 +191,3 @@ def validate_annotations(payload: object, schema: dict, image_names: set[str]) -
             "timestamp_us": image.get("timestamp_us"),
         })
     return output
-
-
-def safe_extract_images(upload: UploadFile, destination: Path) -> tuple[list[str], bytes | None]:
-    temp = destination.parent / "source.zip"
-    total = 0
-    with temp.open("wb") as out:
-        while chunk := upload.file.read(1024 * 1024):
-            total += len(chunk)
-            if total > MAX_UPLOAD_BYTES:
-                raise HTTPException(413, "ZIP exceeds 500 MB limit")
-            out.write(chunk)
-    embedded_annotation: bytes | None = None
-    try:
-        with zipfile.ZipFile(temp) as archive:
-            infos = archive.infolist()
-            if len(infos) > MAX_FILES_PER_ZIP:
-                raise HTTPException(400, "ZIP has too many files")
-            images: list[str] = []
-            for info in infos:
-                path = PurePosixPath(info.filename)
-                if info.is_dir() or path.is_absolute() or ".." in path.parts:
-                    continue
-                if path.suffix.lower() == ".json" and ("annotation" in path.as_posix().lower() or "person_keypoints" in path.as_posix().lower()):
-                    with archive.open(info) as f:
-                        embedded_annotation = f.read()
-                    continue
-                if path.suffix.lower() not in IMAGE_EXTENSIONS:
-                    continue
-                target = destination / Path(*path.parts)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(info) as source, target.open("wb") as output:
-                    shutil.copyfileobj(source, output)
-                images.append(path.as_posix())
-            return images, embedded_annotation
-    except zipfile.BadZipFile as error:
-        raise HTTPException(400, "Invalid ZIP file") from error
-    finally:
-        temp.unlink(missing_ok=True)
