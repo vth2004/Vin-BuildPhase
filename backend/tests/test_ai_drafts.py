@@ -8,6 +8,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
+from xml.etree import ElementTree as ET
 
 import numpy as np
 from PIL import Image
@@ -99,6 +100,19 @@ class AiDraftTests(unittest.TestCase):
         self.assertEqual("AI draft", exported["label"])
         self.assertFalse(exported["visibility_confirmed"])
         self.assertNotIn("nme", exported["images"][0]["annotations"][0]["qc"])
+        coco = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/ai-drafts/export/coco", headers=self.headers,
+        )
+        self.assertEqual(200, coco.status_code, coco.text)
+        self.assertIn("ai_draft_cvat_", coco.headers["content-disposition"])
+        self.assertEqual(17, len(coco.json()["categories"][0]["keypoints"]))
+        self.assertEqual(51, len(coco.json()["annotations"][0]["keypoints"]))
+        cvat = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/ai-drafts/export/cvat", headers=self.headers,
+        )
+        self.assertEqual(200, cvat.status_code, cvat.text)
+        self.assertIn("ai_draft_cvat_", cvat.headers["content-disposition"])
+        self.assertEqual(17, len(ET.fromstring(cvat.content).findall(".//skeleton/points")))
 
     def test_face_unlabeled_run_exports_unconfirmed_ai_draft(self) -> None:
         dataset_id = self._upload("vf_face_landmark50_v1")
@@ -122,6 +136,18 @@ class AiDraftTests(unittest.TestCase):
         self.assertEqual("AI draft", annotation["label"])
         self.assertFalse(annotation["visibility_confirmed"])
         self.assertEqual("mediapipe", annotation["provenance"]["model"])
+        coco = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/ai-drafts/export/coco", headers=self.headers,
+        ).json()
+        self.assertEqual(50, len(coco["categories"][0]["keypoints"]))
+        self.assertEqual(150, len(coco["annotations"][0]["keypoints"]))
+        self.assertEqual(50, coco["annotations"][0]["num_keypoints"])
+        cvat = self.client.get(
+            f"/api/projects/{self.project_id}/runs/{run_id}/ai-drafts/export/cvat", headers=self.headers,
+        )
+        root = ET.fromstring(cvat.content)
+        self.assertEqual(7, len(root.findall("track")))
+        self.assertEqual(50, len(root.findall(".//skeleton/points")))
 
 
 if __name__ == "__main__":
