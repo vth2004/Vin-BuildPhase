@@ -1,0 +1,130 @@
+/* ==========================================================================
+   REVIEW FILTERS & TOOLBAR
+   ========================================================================== */
+
+.filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 14px 18px;
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  font-size: 0.84rem;
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-group span {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.filter-group button {
+  min-height: 32px;
+  padding: 5px 11px;
+  font-size: 0.78rem;
+}
+
+.filter-group select {
+  min-height: 32px;
+  margin: 0;
+  padding: 3px 10px;
+}
+
+.filter-group input {
+  min-height: 32px;
+  border-radius: 7px;
+}
+
+/* Review Workspace Grid */
+.review-container {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 16px;
+}
+
+.warning-list {
+  max-height: 720px;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-subtle);
+  padding: 8px;
+}
+
+.warning-card {
+  padding: 13px 15px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--bg-surface);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.warning-card:hover {
+  border-color: var(--border-medium);
+  box-shadow: var(--shadow-sm);
+}
+
+.warning-card.active {
+  background: var(--blue-subtle);
+  border-color: #bfdbfe;
+  border-left: 3px solid var(--blue-primary);
+  box-shadow: none;
+}
+
+/* Badges — flat tint, no borders */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.badge-error {
+  color: var(--rose-primary);
+  background: var(--rose-subtle);
+  border: 0;
+}
+
+.badge-swap {
+  color: #6d28d9;
+  background: #f5f3ff;
+  border: 0;
+}
+
+.badge-hard {
+  color: var(--amber-primary);
+  background: var(--amber-subtle);
+  border: 0;
+}
+
+.badge-success-subtle {
+  color: #047857;
+  background: var(--emerald-subtle);
+  border: 0;
+}
+
+.badge-warning-subtle {
+  color: #92400e;
+  background: #fef3c7;
+  border: 0;
+}
+
+.badge-mode {
+  color: #0369a1;
+  background: #e0f2fe;
+  border: 0;
+}

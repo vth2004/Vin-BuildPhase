@@ -1,0 +1,160 @@
+/* ==========================================================================
+   INPUTS, BUTTONS & FORMS
+   ========================================================================== */
+
+input[type="text"],
+input[type="password"],
+input[type="file"],
+select {
+  min-height: 38px;
+  padding: 7px 12px;
+  margin: 0 8px 8px 0;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-medium);
+  border-radius: 8px;
+  font-size: 0.86rem;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+input[type="file"] {
+  padding: 5px 8px;
+  max-width: 320px;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+button {
+  min-height: 38px;
+  padding: 7px 15px;
+  color: #ffffff;
+  background: var(--btn-primary-bg);
+  border: 1px solid var(--btn-primary-bg);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--btn-primary-bg-hover);
+  border-color: var(--btn-primary-bg-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button.btn-outline {
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border-color: var(--border-medium);
+}
+
+button.btn-outline:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-surface-subtle);
+  border-color: var(--text-faint);
+  box-shadow: none;
+}
+
+button.btn-outline.active {
+  color: var(--text-primary);
+  background: var(--bg-surface-subtle);
+  border-color: var(--text-secondary);
+  font-weight: 700;
+}
+
+button.btn-success {
+  background: var(--emerald-primary);
+  border-color: var(--emerald-primary);
+}
+
+button.btn-success:hover:not(:disabled) {
+  background: var(--emerald-hover);
+  border-color: var(--emerald-hover);
+}
+
+button.btn-export {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border-color: var(--border-medium);
+}
+
+button.btn-export:hover:not(:disabled) {
+  background: var(--bg-surface-subtle);
+  border-color: var(--text-secondary);
+  box-shadow: none;
+}
+
+/* Notice & Alerts */
+.notice {
+  margin: 0 0 20px;
+  padding: 11px 15px;
+  color: #065f46;
+  background: var(--emerald-subtle);
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-page header + .notice,
+.tool-page section + .notice {
+  margin-top: 16px;
+}
+
+/* Dataset List */
+.dataset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dataset-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  transition: border-color 0.12s ease;
+}
+
+.dataset-item:hover {
+  border-color: var(--border-medium);
+}
+
+.dataset-item strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}

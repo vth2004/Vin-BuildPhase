@@ -1,0 +1,95 @@
+/* ==========================================================================
+   RESPONSIVE LAYOUT
+   ========================================================================== */
+
+@media (max-width: 1024px) {
+  .workflow-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tool-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .review-container {
+    grid-template-columns: 1fr;
+  }
+
+  .warning-list {
+    max-height: 380px;
+  }
+}
+
+@media (max-width: 768px) {
+  .nav-container {
+    padding: 0 16px;
+  }
+
+  .brand-tag, .nav-meta {
+    display: none;
+  }
+
+  .home-page {
+    padding: 40px 16px 64px;
+  }
+
+  .hero-title {
+    font-size: 2rem;
+  }
+
+  .tool-card {
+    padding: 22px;
+  }
+
+  .workflow-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .tool-page header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .action-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 640px) {
+  .brand {
+    flex-shrink: 0;
+  }
+
+  .nav-container {
+    gap: 10px;
+  }
+
+  .nav-links {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    min-width: 0;
+  }
+
+  .nav-links::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-link {
+    flex-shrink: 0;
+    padding: 6px 9px;
+  }
+
+  .nav-pill {
+    display: none;
+  }
+
+  .tool-page section {
+    padding: 18px;
+  }
+
+  .workflow-step-card {
+    padding-left: 12px;
+  }
+}

@@ -1,0 +1,127 @@
+/* ==========================================================================
+   CANVAS PANEL & SKELETON DISPLAY
+   ========================================================================== */
+
+.canvas-panel {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+.canvas-viewport {
+  position: relative;
+  display: flex;
+  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 420px;
+  max-height: 580px;
+  background: var(--bg-stage);
+  border-radius: 8px;
+}
+
+.canvas-viewport img {
+  display: block;
+  max-width: 100%;
+  max-height: 580px;
+  object-fit: contain;
+}
+
+.canvas-viewport svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.canvas-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+
+.info-label {
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.info-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-light);
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dot-green {
+  background: #10b981;
+  color: #10b981;
+}
+
+.dot-red {
+  background: #ef4444;
+  color: #ef4444;
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-medium);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}

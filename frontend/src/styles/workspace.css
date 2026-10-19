@@ -1,0 +1,84 @@
+/* ==========================================================================
+   TOOL WORKSPACE PAGES (HUMAN POSE & FACE GENERAL)
+   ========================================================================== */
+
+main {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 28px 28px 72px;
+}
+
+.tool-page {
+  max-width: 1440px;
+}
+
+.tool-page header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 0 20px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border-light);
+  border-radius: 0;
+  box-shadow: none;
+  margin-bottom: 24px;
+}
+
+.tool-page header h1 {
+  margin: 0 0 4px;
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.tool-page header small {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tool-page code {
+  color: var(--text-secondary);
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-light);
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 0.78em;
+  font-weight: 500;
+}
+
+.tool-page section {
+  margin-top: 16px;
+  padding: 24px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+  transition: border-color 0.15s ease;
+}
+
+.tool-page section:hover {
+  border-color: var(--border-medium);
+}
+
+.tool-page > section:first-of-type {
+  margin-top: 0;
+}
+
+.tool-page h2 {
+  margin: 0 0 12px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+}
+
+.tool-page h3 {
+  font-size: 0.98rem;
+  font-weight: 700;
+}
