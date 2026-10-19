@@ -26,6 +26,8 @@ Nguyên tắc thiết kế quan trọng:
 backend/
 ├── app/main.py                         # composition root FastAPI
 ├── app/core/                           # config, SQLite, auth
+├── app/core/migrations/                # ordered schema modules và legacy upgrades
+├── app/application/                    # dataset/import, review, query và export workflows
 ├── app/shared/                         # ZIP/image metadata, job registry
 ├── app/routers/                        # project/dataset/run/Pose warning API
 ├── app/features/human_pose/            # nghiệp vụ Pose hiện hành
@@ -38,13 +40,16 @@ backend/
 frontend/src/
 ├── app/App.tsx                         # route /, /pose, /face
 ├── features/human-pose/HumanPosePage.tsx
-└── features/face-landmark-vf50/        # page, types, edges/groups
+├── features/face-landmark-vf50/        # page, workspace hook, types, edges/groups
+├── features/temporal/                  # page, workspace hook và review panels
+├── shared/                             # API, session, polling, types
+└── styles/                             # CSS theo phạm vi, giữ nguyên cascade
 
 experiments/model_check/                # benchmark nghiên cứu; không thuộc runtime
 docs/                                   # tài liệu dành cho người/AI
 ```
 
-Các file `backend/app/adapters/*` và `backend/app/services/*` chỉ là compatibility re-export. Code mới phải dùng namespace `app.features...`.
+Các compatibility re-export `backend/app/adapters/*` và `backend/app/services/*` đã được xóa. Code phải import từ `app.features...` hoặc các module `app.application`/`app.shared` phù hợp. Xem [ARCHITECTURE.md](ARCHITECTURE.md) để xác định chỗ sửa và lệnh kiểm tra sau refactor.
 
 ## 3. Kiến trúc runtime và luồng chung
 
@@ -572,4 +577,3 @@ Migration nhẹ chạy lúc startup, có bảng `schema_migrations`. Trước mi
 | đổi review/export Face | `api.py`, `exporters/` |
 | đổi DB | `core/database.py` + migration tests |
 | đổi UI Pose/Face | page tương ứng dưới `frontend/src/features/` |
-

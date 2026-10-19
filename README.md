@@ -14,11 +14,13 @@ backend/app/
 |-- features/
 |   |-- human_pose/                 # Adapter, ensemble, scoring và parser HumanPose
 |   `-- face_landmark_vf50/        # Adapter, parser, 14 rules, scoring, review và export VF50
+|-- application/                    # Điều phối dataset, video import, review và export
 |-- shared/
 |   |-- database/                   # Biên truy cập SQLite dùng chung
 |   |-- datasets/                   # Safe ZIP extraction dùng chung
 |   `-- jobs/                       # Registry và dispatch background run
-|-- core/                           # Cấu hình, database migration, recovery-key security
+|-- core/                           # Cấu hình, SQLite, recovery-key security
+|   `-- migrations/                 # Schema và migration có thứ tự, giữ tương thích DB cũ
 |-- routers/                        # Project, dataset, run và HumanPose warning API
 `-- main.py                         # Composition root đăng ký hai feature
 
@@ -26,11 +28,16 @@ frontend/src/
 |-- app/                            # Router và app shell
 |-- features/
 |   |-- human-pose/
-|   `-- face-landmark-vf50/
-`-- shared/
+|   |-- face-landmark-vf50/
+|   |-- temporal/
+|   `-- video/
+|-- shared/                         # API, session, types và polling dùng chung
+`-- styles/                         # CSS theo phạm vi, import theo thứ tự
 ```
 
-Hai feature không được import logic nghiệp vụ của nhau. Các file trong `backend/app/adapters` và `backend/app/services` chỉ là compatibility re-export tạm thời cho consumer cũ.
+Hai feature không được import logic nghiệp vụ của nhau. Tầng `application` phối hợp các feature; `shared` không phụ thuộc ngược vào feature/application. Các compatibility re-export cũ đã được xóa.
+
+Xem [bản đồ kiến trúc và hướng dẫn refactor](docs/ARCHITECTURE.md).
 
 ## Chạy local
 

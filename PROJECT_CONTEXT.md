@@ -15,8 +15,10 @@ backend/app/
 ├── main.py                     # Composition root FastAPI, CORS, routers và run handlers
 ├── core/
 │   ├── config.py               # Biến môi trường & cấu hình hệ thống
-│   ├── database.py             # SQLite connection & lightweight migration
+│   ├── database.py             # SQLite connection, backup & migration entrypoint
+│   ├── migrations/             # Ordered schema initialization và legacy upgrades
 │   └── security.py             # Xác thực project_guard qua Recovery Key
+├── application/                # Dataset, video import, Pose/Temporal review và export
 ├── features/
 │   ├── human_pose/             # Adapter, ensemble, scoring và parser HumanPose
 │   └── face_landmark_vf50/     # MediaPipe, parser, rules, scoring, review và export Face
@@ -31,7 +33,7 @@ backend/app/
     └── warnings.py             # API cảnh báo và review HumanPose
 ```
 
-Các module cũ trong `app/adapters` và `app/services` là compatibility re-export tạm thời. HumanPose và Face không được import logic nghiệp vụ của nhau.
+Các compatibility re-export cũ trong `app/adapters` và `app/services` đã được xóa. HumanPose và Face không được import logic nghiệp vụ của nhau. Tham khảo [kiến trúc hiện tại](docs/ARCHITECTURE.md) khi thêm chức năng.
 
 ---
 
