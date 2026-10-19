@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { API, requestJson } from '../../shared/api'
 import { readSession, saveSession } from '../../shared/session'
 import type { Dataset, Session } from '../../shared/types'
-import type { Warning, ImageDetails, KeypointDetail } from './types'
+import type { Warning, ImageDetails } from './types'
 
 export function useHumanPoseWorkspace() {
   const [session, setSession] = useState<Session | null>(readSession)
@@ -17,9 +17,7 @@ export function useHumanPoseWorkspace() {
   const [warnings, setWarnings] = useState<Warning[]>([])
   const [selectedWarning, setSelectedWarning] = useState<Warning | null>(null)
   const [message, setMessage] = useState('')
-  const [imgNaturalSize, setImgNaturalSize] = useState<{ w: number; h: number } | null>(null)
   const [imageDetails, setImageDetails] = useState<ImageDetails | null>(null)
-  const [showSkeleton, setShowSkeleton] = useState(true)
   const [runMode, setRunMode] = useState<string | null>(null)
   const [aiDraftRunId, setAiDraftRunId] = useState<string | null>(null)
 
@@ -30,7 +28,6 @@ export function useHumanPoseWorkspace() {
   const [searchImage, setSearchImage] = useState<string>('')
   const [reliabilityFilter, setReliabilityFilter] = useState<'all' | 'high' | 'hard'>('all')
 
-  const imgRef = useRef<HTMLImageElement>(null)
 
   const headers = () => ({ Authorization: `Bearer ${session?.recoveryKey}` })
 
@@ -332,16 +329,5 @@ export function useHumanPoseWorkspace() {
     ? `${API}/projects/${session.projectId}/datasets/${activeDatasetId}/images/${selectedWarning.image_name}?token=${session.recoveryKey}`
     : null
 
-  // Tạo map id -> keypoint để vẽ skeleton. Hook phải chạy trước mọi early return.
-  const kpMap = useMemo(() => {
-    const map: Record<number, KeypointDetail> = {}
-    if (imageDetails?.keypoints) {
-      imageDetails.keypoints.forEach(k => {
-        map[k.id] = k
-      })
-    }
-    return map
-  }, [imageDetails])
-
-  return { session, setSession, datasets, file, validationError, setActiveDatasetId, warnings, selectedWarning, setSelectedWarning, message, imgNaturalSize, setImgNaturalSize, imageDetails, showSkeleton, setShowSkeleton, runMode, aiDraftRunId, minSuspicion, setMinSuspicion, statusFilter, setStatusFilter, jointFilter, setJointFilter, searchImage, setSearchImage, reliabilityFilter, setReliabilityFilter, imgRef, uniqueJoints, filteredWarnings, createProject, resumeProject, handleZipSelect, handleAnnotationSelect, upload, startRun, downloadAiDraft, review, exportCleaned, imageUrl, kpMap }
+  return { session, setSession, datasets, file, validationError, setActiveDatasetId, warnings, selectedWarning, setSelectedWarning, message, imageDetails, runMode, aiDraftRunId, minSuspicion, setMinSuspicion, statusFilter, setStatusFilter, jointFilter, setJointFilter, searchImage, setSearchImage, reliabilityFilter, setReliabilityFilter, uniqueJoints, filteredWarnings, createProject, resumeProject, handleZipSelect, handleAnnotationSelect, upload, startRun, downloadAiDraft, review, exportCleaned, imageUrl, }
 }
