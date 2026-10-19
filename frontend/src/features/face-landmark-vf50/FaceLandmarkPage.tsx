@@ -3,9 +3,6 @@ import { Link } from 'react-router-dom'
 
 import type { Dataset, FaceResultDetail, FaceResultSummary, FaceRun, Point, Session } from './types'
 import { RULE_CODES, VF50_EDGES, VF50_GROUPS } from './vf50'
-import TemporalPanel from '../temporal/TemporalPanel'
-import TemporalRunOptions from '../temporal/TemporalRunOptions'
-import VideoImportPanel from '../video/VideoImportPanel'
 import './face.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
@@ -49,10 +46,6 @@ export default function FaceLandmarkPage() {
   const [runs, setRuns] = useState<FaceRun[]>([])
   const [zipFile, setZipFile] = useState<File | null>(null)
   const [annotationFile, setAnnotationFile] = useState<File | null>(null)
-  const [manifestFile, setManifestFile] = useState<File | null>(null)
-  const [temporalEnabled, setTemporalEnabled] = useState(false)
-  const [temporalWindow, setTemporalWindow] = useState(15)
-  const [activeTemporal, setActiveTemporal] = useState(false)
   const [runId, setRunId] = useState('')
   const [aiDraftAvailable, setAiDraftAvailable] = useState(false)
   const [results, setResults] = useState<FaceResultSummary[]>([])
@@ -146,12 +139,10 @@ export default function FaceLandmarkPage() {
       body.append('file', zipFile)
       body.append('schema_id', 'vf_face_landmark50_v1')
       if (annotationFile) body.append('annotation_file', annotationFile)
-      if (manifestFile) body.append('sequence_manifest_file', manifestFile)
       const data = await request<Dataset>(`/projects/${session.projectId}/datasets`, { method: 'POST', body })
       setDatasetId(data.id)
       setZipFile(null)
       setAnnotationFile(null)
-      setManifestFile(null)
       setMessage(`Đã nhập ${data.image_count} ảnh vào dataset ${data.name}.`)
       await loadProject()
     } catch (error) {
@@ -168,12 +159,11 @@ export default function FaceLandmarkPage() {
     setSelected(null)
     try {
       const run = await request<{ id: string; input_mode: string }>(
-        `/projects/${session.projectId}/runs?dataset_id=${datasetId}&temporal_enabled=${temporalEnabled}&window_size=${temporalWindow}`,
+        `/projects/${session.projectId}/runs?dataset_id=${datasetId}`,
         { method: 'POST' },
       )
       setRunId(run.id)
       setAiDraftAvailable(false)
-      setActiveTemporal(temporalEnabled)
       setMessage('Face run đã bắt đầu.')
       const poll = async () => {
         const state = await request<{ status: string; progress: number; error_message?: string; input_mode?: string }>(
@@ -293,9 +283,6 @@ export default function FaceLandmarkPage() {
     setRunId(targetRun.id)
     setAiDraftAvailable(targetRun.input_mode === 'ai_qc')
     setDatasetId(targetRun.dataset_id)
-    setActiveTemporal(Boolean(targetRun.temporal_enabled))
-    setTemporalEnabled(Boolean(targetRun.temporal_enabled))
-    setTemporalWindow(targetRun.temporal_window_size || 15)
     setMessage(`Đã mở run ${targetRun.id.slice(0, 8)}: ${targetRun.status}.`)
     await loadResults(targetRun.id)
   }
@@ -365,17 +352,8 @@ export default function FaceLandmarkPage() {
           <form onSubmit={upload} className="face-upload-form">
             <label>ZIP ảnh<input type="file" accept=".zip" onChange={event => setZipFile(event.target.files?.[0] || null)} /></label>
             <label>Nhãn tùy chọn<input type="file" accept=".xml,.json" onChange={event => setAnnotationFile(event.target.files?.[0] || null)} /></label>
-            <label>Sequence manifest tùy chọn<input type="file" accept=".json" onChange={event => setManifestFile(event.target.files?.[0] || null)} /></label>
             <button disabled={!zipFile || busy}>Upload Face dataset</button>
           </form>
-          <VideoImportPanel
-            session={session}
-            schemaId="vf_face_landmark50_v1"
-            annotationAccept=".xml,.json,application/xml,application/json"
-            existingDatasetId={datasets.find(item => item.status !== 'ready')?.id}
-            onMessage={setMessage}
-            onReady={async readyDatasetId => { await loadProject(); setDatasetId(readyDatasetId) }}
-          />
         </div>
         <div>
           <h2>2. Chạy kiểm định</h2>
@@ -383,12 +361,11 @@ export default function FaceLandmarkPage() {
             <option value="">Chọn Face dataset</option>
             {datasets.map(dataset => <option key={dataset.id} value={dataset.id} disabled={dataset.status !== 'ready'}>{dataset.name} ({dataset.image_count} ảnh{dataset.status !== 'ready' ? ` · ${dataset.status}` : ''})</option>)}
           </select>
-          {datasetId && datasets.find(item => item.id === datasetId)?.status === 'ready' && <TemporalRunOptions session={session} datasetId={datasetId} enabled={temporalEnabled} windowSize={temporalWindow} onEnabled={setTemporalEnabled} onWindow={setTemporalWindow} />}
           <button disabled={!datasetId || busy || datasets.find(item => item.id === datasetId)?.status !== 'ready'} onClick={startRun}>Chạy MediaPipe + 14 luật</button>
           {runs.length > 0 && (
             <div className="face-run-history">
               <span>Run gần đây:</span>
-              {runs.slice(0, 5).map(run => (
+              {runs.filter(run => !run.temporal_enabled).slice(0, 5).map(run => (
                 <button key={run.id} className="btn-outline" disabled={run.status !== 'completed'} onClick={() => openRun(run)}>
                   {run.dataset_name} · {run.status}{run.temporal_enabled ? ' · Temporal' : ''} · {run.id.slice(0, 8)}
                 </button>
@@ -537,8 +514,6 @@ export default function FaceLandmarkPage() {
           </div>
         </section>
       )}
-
-      {runId && activeTemporal && datasetId && <TemporalPanel session={session} runId={runId} datasetId={datasetId} />}
 
       {guidelineOpen && (
         <div className="face-modal-backdrop" onClick={() => setGuidelineOpen(false)}>

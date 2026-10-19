@@ -1,7 +1,4 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import TemporalPanel from '../temporal/TemporalPanel'
-import TemporalRunOptions from '../temporal/TemporalRunOptions'
-import VideoImportPanel from '../video/VideoImportPanel'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
 
@@ -70,10 +67,6 @@ export default function HumanPosePage() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [annotationFile, setAnnotationFile] = useState<File | null>(null)
-  const [manifestFile, setManifestFile] = useState<File | null>(null)
-  const [temporalEnabled, setTemporalEnabled] = useState(false)
-  const [temporalWindow, setTemporalWindow] = useState(15)
-  const [activeTemporal, setActiveTemporal] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
   const schemaId = 'vf_humanpose17_v1'
   const [runId, setRunId] = useState<string | null>(null)
@@ -280,12 +273,10 @@ export default function HumanPosePage() {
       if (annotationFile) {
         body.append('annotation_file', annotationFile)
       }
-      if (manifestFile) body.append('sequence_manifest_file', manifestFile)
       body.append('schema_id', schemaId)
       const data = await request(`/projects/${session.projectId}/datasets`, { method: 'POST', body })
       setFile(null)
       setAnnotationFile(null)
-      setManifestFile(null)
       setValidationError(null)
       setActiveDatasetId(data.id)
       setMessage(`Đã nhận dataset ${data.name}: ${data.image_count} ảnh theo ${data.schema_id}.`)
@@ -303,10 +294,9 @@ export default function HumanPosePage() {
     }
     try {
       setActiveDatasetId(datasetId)
-      const data = await request(`/projects/${session!.projectId}/runs?dataset_id=${datasetId}&temporal_enabled=${temporalEnabled}&window_size=${temporalWindow}`, { method: 'POST' })
+      const data = await request(`/projects/${session!.projectId}/runs?dataset_id=${datasetId}`, { method: 'POST' })
       setRunId(data.id)
       setAiDraftRunId(null)
-      setActiveTemporal(temporalEnabled)
       setWarnings([])
       setSelectedWarning(null)
       setMessage(`Đã bắt đầu chạy Run (${data.mode === 'real' ? 'Model YOLO26s-pose thật' : data.mode || 'Ensemble'})...`)
@@ -498,10 +488,6 @@ export default function HumanPosePage() {
             <span>Tệp JSON nhãn tùy chọn (COCO 1.0):</span>
             <input type="file" accept=".json,application/json" onChange={e => handleAnnotationSelect(e.target.files?.[0] || null)} />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.8rem', color: '#64748b', fontWeight: 600 }}>
-            <span>Sequence manifest tùy chọn:</span>
-            <input type="file" accept=".json,application/json" onChange={e => setManifestFile(e.target.files?.[0] || null)} />
-          </label>
         </div>
 
         {validationError && (
@@ -515,14 +501,6 @@ export default function HumanPosePage() {
             Tải lên dataset
           </button>
         </div>
-        <VideoImportPanel
-          session={session}
-          schemaId="vf_humanpose17_v1"
-          annotationAccept=".json,application/json"
-          existingDatasetId={datasets.find(item => item.status !== 'ready')?.id}
-          onMessage={setMessage}
-          onReady={async datasetId => { await loadProject(); setActiveDatasetId(datasetId) }}
-        />
       </section>
 
       {/* 2. Quản lý Dataset & Khởi chạy Run */}
@@ -549,7 +527,6 @@ export default function HumanPosePage() {
             ))}
           </div>
         )}
-        {activeDatasetId && datasets.find(d => d.id === activeDatasetId)?.status === 'ready' && <TemporalRunOptions session={session} datasetId={activeDatasetId} enabled={temporalEnabled} windowSize={temporalWindow} onEnabled={setTemporalEnabled} onWindow={setTemporalWindow} />}
       </section>
 
       {/* 3. Review trực quan: Bộ lọc + Danh sách cảnh báo + Canvas Skeleton */}
@@ -877,14 +854,6 @@ export default function HumanPosePage() {
               )}
             </div>
           </div>
-        </section>
-      )}
-      {runId && activeTemporal && activeDatasetId && <TemporalPanel session={session} runId={runId} datasetId={activeDatasetId} />}
-      {runId && activeTemporal && warnings.length === 0 && (
-        <section>
-          <h2>Export Pose đã review</h2>
-          <p style={{ color: '#64748b', fontSize: '0.84rem' }}>Export áp dụng các lựa chọn Human/Temporal đã lưu vào đúng instance.</p>
-          <button className="btn-export" onClick={exportCleaned}>📥 Xuất File Annotation đã sửa (JSON)</button>
         </section>
       )}
     </main>

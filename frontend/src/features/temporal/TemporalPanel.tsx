@@ -19,6 +19,9 @@ type Detail = TemporalItem & { trajectory: Array<{ frame_index: number; timestam
 type ReviewSource = 'human' | 'temporal'
 type Review = { id: string; temporal_result_id: string; annotation_id: string; keypoint_id: number; source: ReviewSource; selected_x: number; selected_y: number; reviewed_at: number }
 type Summary = { total: number; available: number; coverage: number; warnings: number; reviewed_total: number; reviewed_human: number; reviewed_temporal: number; unavailable_reasons: Array<{ unavailable_reason: string; count: number }> }
+type ResultPage = { total: number; page: number; page_size: number; items: TemporalItem[] }
+
+const PAGE_SIZE = 200
 
 const evidenceLabel: Record<string, string> = {
   model_trajectory: 'Quỹ đạo model', annotation_jitter: 'Nhãn bị giật', face_r13: 'Face R13 (đã gộp)',
@@ -35,6 +38,8 @@ export default function TemporalPanel({ session, runId, datasetId }: { session: 
   const [reviewBusy, setReviewBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [size, setSize] = useState({ width: 1280, height: 720 })
+  const [pageNumber, setPageNumber] = useState(1)
+  const [resultTotal, setResultTotal] = useState(0)
 
   const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
     const response = await fetch(`${API}${path}`, { ...init, headers: { Authorization: `Bearer ${session.recoveryKey}`, ...(init.headers || {}) } })
@@ -46,22 +51,24 @@ export default function TemporalPanel({ session, runId, datasetId }: { session: 
     const detail = await request<Detail>(`/projects/${session.projectId}/runs/${runId}/temporal/results/${id}`)
     setSelected(detail)
   }
-  const load = async () => {
-    const query = new URLSearchParams({ page_size: '200' })
+  const load = async (targetPage = pageNumber, selectEdge: 'first' | 'last' = 'first') => {
+    const query = new URLSearchParams({ page_size: String(PAGE_SIZE), page: String(targetPage) })
     if (status !== 'all') query.set('estimate_status', status)
     if (evidence !== 'all') query.set('evidence', evidence)
     const [nextSummary, page, reviewPage] = await Promise.all([
       request<Summary>(`/projects/${session.projectId}/runs/${runId}/temporal/summary`),
-      request<{ items: TemporalItem[] }>(`/projects/${session.projectId}/runs/${runId}/temporal/results?${query}`),
+      request<ResultPage>(`/projects/${session.projectId}/runs/${runId}/temporal/results?${query}`),
       request<{ items: Review[] }>(`/projects/${session.projectId}/runs/${runId}/temporal/reviews`),
     ])
     setSummary(nextSummary)
     setItems(page.items)
+    setPageNumber(page.page)
+    setResultTotal(page.total)
     setReviews(reviewPage.items)
-    if (page.items.length) await loadDetail(page.items[0].id)
+    if (page.items.length) await loadDetail(page.items[selectEdge === 'last' ? page.items.length - 1 : 0].id)
     else setSelected(null)
   }
-  useEffect(() => { load().catch(error => setMessage(error.message)) }, [runId, status, evidence])
+  useEffect(() => { setPageNumber(1); load(1).catch(error => setMessage(error.message)) }, [runId, status, evidence])
 
   const imageUrl = (fileName?: string | null) => fileName
     ? `${API}/projects/${session.projectId}/datasets/${datasetId}/images/${fileName.split('/').map(encodeURIComponent).join('/')}?token=${encodeURIComponent(session.recoveryKey)}`
@@ -75,6 +82,17 @@ export default function TemporalPanel({ session, runId, datasetId }: { session: 
   const selectedIndex = visibleItems.findIndex(item => item.id === selected?.id)
   const selectedReview = selected ? reviewsByKey.get(reviewKey(selected)) : undefined
   const trajectoryPoints = useMemo(() => selected?.trajectory.filter(item => item.point).map(item => `${item.point!.x},${item.point!.y}`).join(' ') || '', [selected])
+  const overlayScale = Math.max(1, Math.min(size.width, size.height) / 720)
+  const totalPages = Math.max(1, Math.ceil(resultTotal / PAGE_SIZE))
+
+  const goPrevious = async () => {
+    if (selectedIndex > 0) return loadDetail(visibleItems[selectedIndex - 1].id)
+    if (pageNumber > 1) await load(pageNumber - 1, 'last')
+  }
+  const goNext = async () => {
+    if (selectedIndex >= 0 && selectedIndex < visibleItems.length - 1) return loadDetail(visibleItems[selectedIndex + 1].id)
+    if (pageNumber < totalPages) await load(pageNumber + 1, 'first')
+  }
 
   const saveReview = async (source: ReviewSource) => {
     if (!selected) return
@@ -138,27 +156,37 @@ export default function TemporalPanel({ session, runId, datasetId }: { session: 
           {reviewsByKey.get(reviewKey(item)) && <strong className={`temporal-review-badge ${reviewsByKey.get(reviewKey(item))!.source}`}>{reviewsByKey.get(reviewKey(item))!.source === 'temporal' ? 'Đã dùng Temporal' : 'Đã giữ Human'}</strong>}
         </button>)}
         {!visibleItems.length && <p>Không có điểm phù hợp bộ lọc.</p>}
+        <div className="temporal-pagination">
+          <button disabled={pageNumber <= 1} onClick={() => load(pageNumber - 1).catch(error => setMessage(error.message))}>← Trang trước</button>
+          <span>Trang {pageNumber}/{totalPages} · {resultTotal} điểm</span>
+          <button disabled={pageNumber >= totalPages} onClick={() => load(pageNumber + 1).catch(error => setMessage(error.message))}>Trang sau →</button>
+        </div>
       </aside>
       <div className="temporal-inspector">
         {!selected ? <p>Chọn một kết quả temporal để xem chi tiết.</p> : <>
-          <div className="temporal-nav"><button disabled={selectedIndex <= 0} onClick={() => loadDetail(visibleItems[selectedIndex - 1].id)}>← Trước</button><b>Frame {selected.frame_index} · Track {selected.internal_track_id.slice(0, 8)}</b><button disabled={selectedIndex < 0 || selectedIndex >= visibleItems.length - 1} onClick={() => loadDetail(visibleItems[selectedIndex + 1].id)}>Sau →</button></div>
+          <div className="temporal-nav"><button disabled={selectedIndex <= 0 && pageNumber <= 1} onClick={() => goPrevious().catch(error => setMessage(error.message))}>← Trước</button><b>Frame {selected.frame_index} · Track {selected.internal_track_id.slice(0, 8)}</b><button disabled={selectedIndex < 0 || (selectedIndex >= visibleItems.length - 1 && pageNumber >= totalPages)} onClick={() => goNext().catch(error => setMessage(error.message))}>Sau →</button></div>
           <div className="temporal-canvas">
             <img src={imageUrl(selected.file_name)} onLoad={event => setSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} />
             <svg viewBox={`0 0 ${size.width} ${size.height}`}>
               {trajectoryPoints && <polyline points={trajectoryPoints} className="temporal-path" />}
-              {selected.human_x != null && selected.human_y != null && <circle cx={selected.human_x} cy={selected.human_y} r="7" className="temporal-human" />}
-              {selected.raw_x != null && selected.raw_y != null && <circle cx={selected.raw_x} cy={selected.raw_y} r="7" className="temporal-model" />}
-              {selected.temporal_x != null && selected.temporal_y != null && <circle cx={selected.temporal_x} cy={selected.temporal_y} r="8" className="temporal-estimate" />}
+              {selected.human_x != null && selected.human_y != null && <g>
+                <circle cx={selected.human_x} cy={selected.human_y} r={7 * overlayScale} className="temporal-human" />
+                <text x={selected.human_x - 11 * overlayScale} y={selected.human_y - 10 * overlayScale} textAnchor="end" className="temporal-point-label human" style={{ fontSize: 18 * overlayScale, strokeWidth: 5 * overlayScale }}>{selected.keypoint_id}</text>
+              </g>}
+              {selected.temporal_x != null && selected.temporal_y != null && <g>
+                <circle cx={selected.temporal_x} cy={selected.temporal_y} r={8 * overlayScale} className="temporal-estimate" />
+                <text x={selected.temporal_x + 12 * overlayScale} y={selected.temporal_y - 10 * overlayScale} textAnchor="start" className="temporal-point-label estimate" style={{ fontSize: 18 * overlayScale, strokeWidth: 5 * overlayScale }}>{selected.keypoint_id}</text>
+              </g>}
             </svg>
           </div>
-          <div className="temporal-legend"><span className="human">Human</span><span className="model">Model</span><span className="estimate">Temporal</span></div>
+          <div className="temporal-legend"><span className="human">Human · Point {selected.keypoint_id}</span><span className="estimate">Temporal · Point {selected.keypoint_id}</span></div>
           <div className="temporal-review-actions">
             <div>
               <b>{selectedReview ? (selectedReview.source === 'temporal' ? 'Đang dùng Temporal' : 'Đang giữ Human') : 'Chưa review'}</b>
               {selectedReview && <small>Tọa độ đã lưu: ({selectedReview.selected_x.toFixed(1)}, {selectedReview.selected_y.toFixed(1)})</small>}
             </div>
             <button className={selectedReview?.source === 'human' ? 'selected human' : ''} disabled={reviewBusy || !selected.annotation_id || selected.human_x == null || selected.human_y == null} onClick={() => saveReview('human')}>Giữ điểm Human</button>
-            <button className={selectedReview?.source === 'temporal' ? 'selected temporal' : ''} disabled={reviewBusy || !selected.annotation_id || selected.estimate_status !== 'available' || selected.temporal_x == null || selected.temporal_y == null} onClick={() => saveReview('temporal')}>Dùng điểm Temporal</button>
+            <button className={selectedReview?.source === 'temporal' ? 'selected temporal' : ''} title={!selected.evidence || selected.temporal_quality < 0.45 ? 'Temporal chưa có đủ bằng chứng tin cậy để thay điểm Human.' : undefined} disabled={reviewBusy || !selected.annotation_id || selected.estimate_status !== 'available' || selected.temporal_x == null || selected.temporal_y == null || !selected.evidence || selected.temporal_quality < 0.45} onClick={() => saveReview('temporal')}>Dùng điểm Temporal</button>
             <button className="clear" disabled={reviewBusy || !selectedReview} onClick={clearReview}>Bỏ lựa chọn</button>
           </div>
           <div className="temporal-metrics">

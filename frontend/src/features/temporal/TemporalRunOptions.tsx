@@ -6,9 +6,9 @@ type Session = { projectId: string; recoveryKey: string }
 type Frame = { file_name: string; original_frame_index: number | null }
 type Sequence = { id: string; name: string; frame_count: number; frame_order_source: string; frame_deltas: number[]; confirmed_at: number | null; fps: number | null; requires_manifest: boolean; reason?: string | null; frames: Frame[] }
 type Summary = { temporal_ready: boolean; sequences: Sequence[] }
-type Props = { session: Session; datasetId: string; enabled: boolean; windowSize: number; onEnabled: (value: boolean) => void; onWindow: (value: number) => void }
+type Props = { session: Session; datasetId: string; enabled: boolean; windowSize: number; maxWindowSize?: number; onEnabled: (value: boolean) => void; onWindow: (value: number) => void }
 
-export default function TemporalRunOptions({ session, datasetId, enabled, windowSize, onEnabled, onWindow }: Props) {
+export default function TemporalRunOptions({ session, datasetId, enabled, windowSize, maxWindowSize = 29, onEnabled, onWindow }: Props) {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [fps, setFps] = useState('')
   const [message, setMessage] = useState('')
@@ -34,7 +34,7 @@ export default function TemporalRunOptions({ session, datasetId, enabled, window
 
   return <div className="temporal-options">
     <label className="temporal-toggle"><input type="checkbox" checked={enabled} disabled={!summary?.temporal_ready} onChange={event => onEnabled(event.target.checked)} /><span><b>Temporal QA</b> <em>Thử nghiệm</em><small>Phân tích offline bằng frame trước và sau; QA/QC hiện tại không thay đổi.</small></span></label>
-    <label>Cửa sổ <select value={windowSize} disabled={!enabled} onChange={event => onWindow(Number(event.target.value))}>{Array.from({ length: 13 }, (_, index) => 5 + index * 2).map(value => <option key={value}>{value}</option>)}</select> frame {duration && <small>≈ {duration}</small>}</label>
+    <label>Cửa sổ <select value={windowSize} disabled={!enabled} onChange={event => onWindow(Number(event.target.value))}>{Array.from({ length: Math.floor((maxWindowSize - 5) / 2) + 1 }, (_, index) => 5 + index * 2).map(value => <option key={value}>{value}</option>)}</select> frame {duration && <small>≈ {duration}</small>}</label>
     {message && <p className="notice">{message}</p>}
     {summary && !summary.temporal_ready && <p className="temporal-help">Temporal chưa bật được: xác nhận mapping hoặc cung cấp manifest nếu mapping mơ hồ.</p>}
     <div className="sequence-grid">{summary?.sequences.map(sequence => {

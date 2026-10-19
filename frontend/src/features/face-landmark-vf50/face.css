@@ -104,17 +104,16 @@ button.face-result {
 }
 
 button.face-result:hover {
-  background: #ffffff;
+  background: var(--bg-surface);
   border-color: var(--border-medium);
   box-shadow: var(--shadow-sm);
-  transform: translateX(2px);
 }
 
 button.face-result.active {
-  background: #fff7ed;
-  border-color: #fdba74;
-  border-left: 4px solid #ea580c;
-  box-shadow: var(--shadow-sm);
+  background: var(--blue-subtle);
+  border-color: #bfdbfe;
+  border-left: 3px solid var(--blue-primary);
+  box-shadow: none;
 }
 
 .face-result small {
@@ -199,7 +198,7 @@ button.face-result.active {
 
 .face-display-mode button.active {
   color: #ffffff;
-  background: #ea580c;
+  background: var(--btn-primary-bg);
   font-weight: 700;
 }
 
@@ -334,8 +333,8 @@ button.face-result.active {
 }
 
 .face-violations button:hover {
-  background: #fff7ed;
-  border-color: #fdba74;
+  background: var(--bg-surface-subtle);
+  border-color: var(--border-medium);
 }
 
 .face-violations span,
@@ -398,10 +397,10 @@ button.face-result.active {
 }
 
 .face-review-list button.active {
-  color: #7c2d12;
-  background: #fff7ed;
-  border-color: #fdba74;
-  outline: 2px solid #ea580c;
+  color: var(--text-primary);
+  background: var(--blue-subtle);
+  border-color: #bfdbfe;
+  outline: 2px solid var(--blue-primary);
   outline-offset: -2px;
 }
 
@@ -428,16 +427,20 @@ button.face-result.active {
   padding: 10px 18px;
   color: #ffffff;
   text-decoration: none;
-  background: var(--blue-primary);
-  border-radius: var(--radius-sm);
-  font-weight: 700;
+  background: var(--btn-primary-bg);
+  border-radius: 8px;
+  font-weight: 600;
   font-size: 0.86rem;
   margin-top: 14px;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.12s ease;
 }
 
 .face-link-button:hover {
-  background: var(--blue-hover);
+  background: var(--btn-primary-bg-hover);
+}
+
+.face-link-button:visited {
+  color: #ffffff;
 }
 
 /* Modal Dialog */

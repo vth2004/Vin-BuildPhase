@@ -55,21 +55,85 @@ export default function HomePage() {
       <div className="home-container">
         {/* Hero Section */}
         <section className="home-hero" aria-labelledby="home-title">
-          <div className="hero-pill">
-            <span className="hero-pill-badge">VINFAST AUTOMOTIVE AI</span>
-            <span className="hero-pill-divider"></span>
-            <span className="hero-pill-text">Data Quality Engineering Suite</span>
-          </div>
-
           <h1 id="home-title" className="hero-title">
-            Kiểm định annotation,
-            <span className="hero-title-accent"> tập trung vào quyết định.</span>
+            Kiểm định annotation,<span className="hero-title-accent"> tập trung vào quyết định.</span>
           </h1>
 
           <p className="home-lede">
-            Nền tảng kiểm định chất lượng dữ liệu thị giác máy tính chuyên sâu cho các bộ dữ liệu Human Pose và Face Landmark.
-            Tự động rà soát sai lệch keypoint, đối chiếu đề xuất AI và tối ưu hóa thời gian QA cho đội ngũ dữ liệu.
+            Công cụ kiểm chất lượng nhãn Human Pose và Face Landmark: rà soát sai lệch keypoint bằng model AI,
+            đối chiếu với nhãn người gán và xuất dữ liệu đã duyệt.
           </p>
+
+          {/* Decorative — landmark wireframe, aria-hidden */}
+          <div className="hero-visuals" aria-hidden="true">
+          <svg className="hero-visual hero-visual--pose" viewBox="0 0 420 470" fill="none">
+            <g stroke="#18181b" strokeOpacity="0.1" strokeWidth="2">
+              <circle cx="210" cy="48" r="26" />
+              <path d="M210 76v26" />
+              <path d="M210 102 122 124" />
+              <path d="M210 102 298 124" />
+              <path d="M120 124h180" />
+              <path d="M120 124 96 192" />
+              <path d="M300 124 324 192" />
+              <path d="M96 192 110 262" />
+              <path d="M324 192 310 262" />
+              <path d="M210 102 204 242" />
+              <path d="M204 242 150 252" />
+              <path d="M204 242 262 252" />
+              <path d="M120 124 150 252" />
+              <path d="M300 124 262 252" />
+              <path d="M150 252 136 352" />
+              <path d="M262 252 280 352" />
+              <path d="M136 352 146 442" />
+              <path d="M280 352 270 442" />
+            </g>
+            <g fill="#18181b" fillOpacity="0.13">
+              <circle cx="120" cy="124" r="4.5" />
+              <circle cx="96" cy="192" r="4.5" />
+              <circle cx="324" cy="192" r="4.5" />
+              <circle cx="310" cy="262" r="4.5" />
+              <circle cx="150" cy="252" r="4.5" />
+              <circle cx="262" cy="252" r="4.5" />
+              <circle cx="136" cy="352" r="4.5" />
+              <circle cx="280" cy="352" r="4.5" />
+              <circle cx="146" cy="442" r="4.5" />
+              <circle cx="270" cy="442" r="4.5" />
+              <circle cx="210" cy="48" r="4.5" />
+              <circle cx="210" cy="102" r="4.5" />
+            </g>
+            <circle cx="300" cy="124" r="6" fill="#ea580c" fillOpacity="0.5" />
+            <circle cx="300" cy="124" r="10.5" stroke="#ea580c" strokeOpacity="0.3" strokeWidth="2" fill="none" />
+            <circle cx="110" cy="262" r="6" fill="#059669" fillOpacity="0.5" />
+            <circle cx="110" cy="262" r="10.5" stroke="#059669" strokeOpacity="0.3" strokeWidth="2" fill="none" />
+          </svg>
+          <svg className="hero-visual hero-visual--face" viewBox="0 0 320 340" fill="none">
+            <g stroke="#18181b" strokeOpacity="0.1" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M160 34c-55 0-91 41-91 101v33c0 60 37 115 91 139 54-24 91-79 91-139v-33c0-60-36-101-91-101Z" />
+              <path d="M69 155c-15-15-20 14-4 37m186-37c15-15 20 14 4 37" />
+              <path d="M84 119c19-16 44-18 67-5m18 0c23-13 48-11 67 5" />
+              <path d="M88 146c15-13 39-15 55 0-16 11-40 11-55 0Zm89 0c16-15 40-13 55 0-15 11-39 11-55 0Z" />
+              <path d="M160 123v55l-13 20c7 8 19 8 26 0l-13-20" />
+              <path d="M113 218c16-11 33-12 47-6 14-6 31-5 47 6-11 13-28 20-47 20s-36-7-47-20Z" />
+              <path d="M135 220c15-5 35-5 50 0-15 8-35 8-50 0Z" />
+              <path d="M160 66v35m-72 45h-18m162 0h18m-90 92v45" strokeDasharray="3 8" />
+            </g>
+            <g fill="#18181b" fillOpacity="0.16">
+              {[
+                [84, 119], [100, 110], [118, 106], [136, 108], [151, 114],
+                [169, 114], [184, 108], [202, 106], [220, 110], [236, 119],
+                [160, 123], [160, 142], [160, 161], [160, 178],
+                [88, 146], [100, 139], [116, 136], [132, 139], [143, 146], [132, 152], [116, 155], [100, 152],
+                [177, 146], [188, 139], [204, 136], [220, 139], [232, 146], [220, 152], [204, 155], [188, 152],
+                [113, 218], [125, 211], [139, 207], [151, 210], [160, 212], [169, 210], [181, 207], [195, 211], [207, 218], [193, 230], [160, 238], [127, 230],
+                [135, 220], [145, 217], [155, 219], [165, 219], [175, 217], [185, 220], [175, 224], [145, 224],
+              ].map(([cx, cy], index) => <circle key={index} cx={cx} cy={cy} r="3" />)}
+            </g>
+            <circle cx="204" cy="136" r="5.5" fill="#ea580c" fillOpacity="0.5" />
+            <circle cx="204" cy="136" r="10" stroke="#ea580c" strokeOpacity="0.3" strokeWidth="2" />
+            <circle cx="139" cy="207" r="5.5" fill="#059669" fillOpacity="0.5" />
+            <circle cx="139" cy="207" r="10" stroke="#059669" strokeOpacity="0.3" strokeWidth="2" />
+          </svg>
+          </div>
 
           <div className="hero-stats">
             <div className="stat-card">
@@ -91,8 +155,6 @@ export default function HomePage() {
         <section className="tool-grid" aria-label="Chọn công cụ kiểm định">
           {tools.map(tool => (
             <article className={`tool-card tool-card--${tool.tone}`} key={tool.to}>
-              <div className="tool-card-glow" aria-hidden="true"></div>
-              
               <div className="tool-card-header">
                 <div className="tool-icon-wrap">
                   {tool.icon}
@@ -147,6 +209,11 @@ export default function HomePage() {
             ))}
           </div>
         </section>
+
+        <footer className="home-footer">
+          <span>LANDMARK QA — DATA QUALITY CONSOLE</span>
+          <span>v2.4 · HUMANPOSE-17 · FACE-VF50</span>
+        </footer>
       </div>
     </main>
   )

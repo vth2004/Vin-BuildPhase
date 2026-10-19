@@ -2,6 +2,7 @@ import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 
 import FaceLandmarkPage from '../features/face-landmark-vf50/FaceLandmarkPage'
 import HumanPosePage from '../features/human-pose/HumanPosePage'
+import TemporalReviewPage from '../features/temporal/TemporalReviewPage'
 import HomePage from './HomePage'
 
 export default function App() {
@@ -33,18 +34,19 @@ export default function App() {
               Human Pose
               <span className="nav-pill">COCO-17</span>
             </Link>
-            <Link className={`nav-link ${location.pathname.startsWith('/face') ? 'active' : ''}`} to="/face">
+            <Link className={`nav-link nav-link--temporal ${location.pathname === '/pose/temporal' ? 'active' : ''}`} to="/pose/temporal">Pose Temporal</Link>
+            <Link className={`nav-link ${location.pathname === '/face' ? 'active' : ''}`} to="/face">
               <span className="nav-dot nav-dot--face" aria-hidden="true"></span>
               Face Landmark
               <span className="nav-pill">VF50</span>
             </Link>
+            <Link className={`nav-link nav-link--temporal ${location.pathname === '/face/temporal' ? 'active' : ''}`} to="/face/temporal">Face Temporal</Link>
           </div>
 
           <div className="nav-meta">
             <span className="status-badge">
-              <span className="status-ping"></span>
-              <span className="status-dot"></span>
-              QA Engine v2.4
+              <span className="status-dot" aria-hidden="true"></span>
+              v2.4
             </span>
           </div>
         </div>
@@ -53,7 +55,9 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/pose" element={<HumanPosePage />} />
+        <Route path="/pose/temporal" element={<TemporalReviewPage feature="pose" />} />
         <Route path="/face" element={<FaceLandmarkPage />} />
+        <Route path="/face/temporal" element={<TemporalReviewPage feature="face" />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
