@@ -3,6 +3,28 @@ import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { stripTypeScriptTypes } from 'node:module'
 
+test('polling stops at terminal status and waits for each update', async () => {
+  const { pollUntil } = await loadHelper('poll')
+  const seen = []
+  let count = 0
+  await pollUntil(async () => ++count, async value => { seen.push(value) }, value => value === 3, new AbortController().signal, 0)
+  assert.deepEqual(seen, [1, 2, 3])
+  assert.equal(count, 3)
+})
+
+test('polling ignores an in-flight response after cancellation', async () => {
+  const { pollUntil } = await loadHelper('poll')
+  const controller = new AbortController()
+  const seen = []
+  await pollUntil(async () => { controller.abort(); return 'completed' }, value => seen.push(value), () => true, controller.signal, 0)
+  assert.deepEqual(seen, [])
+})
+
+test('polling reports read errors without silently retrying', async () => {
+  const { pollUntil } = await loadHelper('poll')
+  await assert.rejects(pollUntil(async () => { throw new Error('offline') }, () => {}, () => false, new AbortController().signal, 0), /offline/)
+})
+
 // Compile the browser helpers in memory; no extra test dependencies or build output.
 async function loadHelper(name) {
   const source = await readFile(new URL(`../src/shared/${name}.ts`, import.meta.url), 'utf8')

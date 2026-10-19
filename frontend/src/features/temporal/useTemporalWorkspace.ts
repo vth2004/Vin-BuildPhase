@@ -1,3 +1,4 @@
+import { useRunMonitor } from '../../shared/useRunMonitor'
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -25,6 +26,7 @@ const CONFIG = {
 export function useTemporalWorkspace(feature: 'pose' | 'face') {
   const config = CONFIG[feature]
   const session = readSession()
+  const { monitor, cancel } = useRunMonitor(session)
   const [searchParams, setSearchParams] = useSearchParams()
   const [runs, setRuns] = useState<TemporalRun[]>([])
   const [datasets, setDatasets] = useState<Dataset[]>([])
@@ -68,16 +70,12 @@ export function useTemporalWorkspace(feature: 'pose' | 'face') {
         method: 'POST',
       }, session.recoveryKey)
       setSelectedRunId(created.id)
-      const poll = async (): Promise<void> => {
-        const state = await requestJson<{ status: string; progress: number; error_message?: string; input_mode?: 'annotated' | 'ai_qc' }>(`/projects/${session.projectId}/runs/${created.id}`, {}, session.recoveryKey)
+      await monitor(created.id, state => {
         setRuns(current => [{ id: created.id, dataset_id: datasetId, dataset_name: datasets.find(item => item.id === datasetId)?.name || datasetId, status: state.status, progress: state.progress, created_at: Date.now(), temporal_enabled: true, temporal_window_size: windowSize, input_mode: state.input_mode || 'annotated' }, ...current.filter(run => run.id !== created.id)])
         setMessage(`Temporal run: ${state.status} (${state.progress}%)`)
         if (state.status === 'completed') { setBusy(false); return }
         if (state.status === 'failed') { setBusy(false); throw new Error(state.error_message || 'Temporal run thất bại.') }
-        await new Promise(resolve => window.setTimeout(resolve, 1000))
-        await poll()
-      }
-      await poll()
+      })
     } catch (error) { setBusy(false); setMessage((error as Error).message) }
   }
 

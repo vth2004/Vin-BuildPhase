@@ -1,3 +1,4 @@
+import { useRunMonitor } from '../../shared/useRunMonitor'
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { API, requestJson } from '../../shared/api'
@@ -7,6 +8,7 @@ import type { Warning, ImageDetails } from './types'
 
 export function useHumanPoseWorkspace() {
   const [session, setSession] = useState<Session | null>(readSession)
+  const { monitor, cancel } = useRunMonitor(session)
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [annotationFile, setAnnotationFile] = useState<File | null>(null)
@@ -54,25 +56,20 @@ export function useHumanPoseWorkspace() {
 
   useEffect(() => {
     if (!runId || !session) return
-    let timerId: any
-    const tick = async () => {
-      const run = await request(`/projects/${session.projectId}/runs/${runId}`)
+    monitor(runId, async run => {
       if (run.status === 'completed' && run.input_mode === 'ai_qc') setAiDraftRunId(runId)
       if (run.mode) setRunMode(run.mode)
       const modeLabel = run.mode === 'K2' ? 'Ensemble K=2' : run.mode === 'K1' || run.mode === 'K1_fast' ? 'K=1 Nhanh' : run.mode === 'K1_fallback' ? 'K=1 (Fallback)' : run.mode ? run.mode : ''
       setMessage(`Tiến độ Run: ${run.status} (${run.progress}%) ${modeLabel ? `[${modeLabel}]` : ''}`)
       if (run.status === 'completed' || run.status === 'failed') {
-        clearInterval(timerId)
         if (run.status === 'completed') {
           const items: Warning[] = await request(`/projects/${session.projectId}/runs/${runId}/warnings`)
           setWarnings(items)
           setSelectedWarning(prev => prev ?? (items.length > 0 ? items[0] : null))
         }
       }
-    }
-    tick().catch(e => setMessage(e.message))
-    timerId = setInterval(tick, 1000)
-    return () => clearInterval(timerId)
+    }).catch(e => setMessage(e.message))
+    return cancel
   }, [runId, session?.projectId])
 
 

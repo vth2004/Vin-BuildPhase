@@ -1,3 +1,4 @@
+import { useRunMonitor } from '../../shared/useRunMonitor'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, PointerEvent } from 'react'
 import { API, requestJson } from '../../shared/api'
@@ -8,6 +9,7 @@ import type { PointDisplayMode } from './points'
 
 export function useFaceWorkspace() {
   const session = readSession()
+  const { monitor, cancel } = useRunMonitor(session)
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [datasetId, setDatasetId] = useState('')
   const [runs, setRuns] = useState<FaceRun[]>([])
@@ -123,10 +125,7 @@ export function useFaceWorkspace() {
       setRunId(run.id)
       setAiDraftAvailable(false)
       setMessage('Face run đã bắt đầu.')
-      const poll = async () => {
-        const state = await request<{ status: string; progress: number; error_message?: string; input_mode?: string }>(
-          `/projects/${session.projectId}/runs/${run.id}`,
-        )
+      await monitor(run.id, async state => {
         setMessage(`Face run: ${state.status} (${state.progress}%)`)
         if (state.status === 'completed') {
           setAiDraftAvailable(state.input_mode === 'ai_qc')
@@ -140,12 +139,7 @@ export function useFaceWorkspace() {
           setMessage(state.error_message || 'Face run thất bại.')
           return
         }
-        window.setTimeout(() => poll().catch(error => {
-          setBusy(false)
-          setMessage(error.message)
-        }), 1000)
-      }
-      await poll()
+      })
     } catch (error) {
       setBusy(false)
       setMessage((error as Error).message)
