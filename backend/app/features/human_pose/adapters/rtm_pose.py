@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import os
 import numpy as np
 
 from .base import BasePosePredictor
@@ -19,12 +20,14 @@ class RtmPosePredictor(BasePosePredictor):
         self.device = device
 
         from rtmlib import Body
-        self.body = Body(
-            mode=mode,
-            to_openpose=False,
-            backend="onnxruntime",
-            device=device,
-        )
+        detector = os.getenv("RTMPOSE_DET_MODEL_PATH")
+        pose = os.getenv("RTMPOSE_POSE_MODEL_PATH")
+        if bool(detector) != bool(pose):
+            raise ValueError("Set both RTMPOSE_DET_MODEL_PATH and RTMPOSE_POSE_MODEL_PATH")
+        model_paths = {"det": detector, "pose": pose, "det_input_size": (640, 640),
+                       "pose_input_size": (192, 256)} if detector and pose else {}
+        self.body = Body(mode=mode, to_openpose=False, backend="onnxruntime",
+                         device=device, **model_paths)
 
     def predict(self, image_path: str | Path) -> list[dict[str, Any]]:
         """

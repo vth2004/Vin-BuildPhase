@@ -4,9 +4,27 @@ import json
 import sqlite3
 import shutil
 import time
+from pathlib import Path
 from collections.abc import Iterator
 from contextlib import contextmanager
 from app.core.config import DATA_DIR, DB_PATH
+
+
+def store_data_path(path: Path) -> str:
+    """Persist a path relative to the configured data root."""
+    return path.resolve().relative_to(DATA_DIR.resolve()).as_posix()
+
+
+def resolve_data_path(stored: str) -> Path:
+    """Resolve new relative paths and still read legacy absolute paths."""
+    path = Path(stored)
+    if path.is_absolute():
+        return path.resolve()
+    root = DATA_DIR.resolve()
+    resolved = (root / path).resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError("Stored data path escapes LANDMARK_DATA_DIR")
+    return resolved
 
 
 FACE_MIGRATION = "001_face_landmark_vf50"

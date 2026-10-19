@@ -34,6 +34,8 @@ Hai feature không được import logic nghiệp vụ của nhau. Các file tro
 
 ## Chạy local
 
+Triển khai mới bằng Docker Compose: xem [hướng dẫn deploy](docs/DOCKER_DEPLOY.md).
+
 ### Backend — cổng 8000
 
 Yêu cầu Python 3.10+.

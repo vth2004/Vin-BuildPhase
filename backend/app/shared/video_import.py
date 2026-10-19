@@ -7,7 +7,7 @@ import time
 import uuid
 from pathlib import Path
 
-from app.core.database import db
+from app.core.database import db, resolve_data_path, store_data_path
 from app.features.face_landmark_vf50 import SCHEMA_ID as FACE_SCHEMA_ID
 from app.features.face_landmark_vf50.services.ingestion import parse_face_annotations
 from app.features.human_pose.services.dataset import load_schema, validate_annotations
@@ -31,9 +31,9 @@ def execute_video_import(job_id: str) -> None:
         )
         conn.execute("UPDATE datasets SET status = 'processing' WHERE id = ?", (job["dataset_id"],))
 
-    staging_root = Path(job["staging_path"])
+    staging_root = resolve_data_path(job["staging_path"])
     staging_frames = staging_root / "frames"
-    final_images = Path(job["storage_path"])
+    final_images = resolve_data_path(job["storage_path"])
     dataset_root = final_images.parent
     try:
         source_candidates = sorted(dataset_root.glob("source_video.*"))
@@ -50,7 +50,7 @@ def execute_video_import(job_id: str) -> None:
 
         validated: list[dict] = []
         if job["annotation_path"]:
-            raw_annotation = Path(job["annotation_path"]).read_bytes()
+            raw_annotation = resolve_data_path(job["annotation_path"]).read_bytes()
             normalized = prepare_video_annotation(raw_annotation, len(decoded.frames))
             image_names = {frame.file_name for frame in decoded.frames}
             if job["schema_id"] == FACE_SCHEMA_ID:
@@ -93,7 +93,7 @@ def execute_video_import(job_id: str) -> None:
                              'ready', ?, ?, ?, ?, ?, ?, ?)""",
                 (sequence_id, job["dataset_id"], job["name"], decoded.fps,
                  "video_metadata" if decoded.fps else None, now, job["project_id"],
-                 json.dumps(snapshot, ensure_ascii=False), str(source_candidates[0]), decoded.codec,
+                 json.dumps(snapshot, ensure_ascii=False), store_data_path(source_candidates[0]), decoded.codec,
                  decoded.width, decoded.height, len(decoded.frames), decoded.rotation_degrees, now),
             )
             for frame in decoded.frames:
@@ -146,7 +146,7 @@ def recover_interrupted_video_imports() -> int:
             "SELECT id, dataset_id, staging_path FROM video_import_jobs WHERE status IN ('pending', 'processing')"
         ).fetchall()
         for row in rows:
-            shutil.rmtree(row["staging_path"], ignore_errors=True)
+            shutil.rmtree(resolve_data_path(row["staging_path"]), ignore_errors=True)
             conn.execute(
                 """UPDATE video_import_jobs SET status = 'interrupted',
                           error_message = 'Backend restarted during video import', finished_at = ? WHERE id = ?""",

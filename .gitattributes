@@ -1,0 +1,5 @@
+backend/docker-entrypoint.sh text eol=lf
+backend/Dockerfile text eol=lf
+frontend/Dockerfile text eol=lf
+frontend/nginx.conf text eol=lf
+compose.yaml text eol=lf

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from app.core.config import (
     DATA_DIR, IMAGE_EXTENSIONS, MAX_DECODED_VIDEO_BYTES, MAX_UPLOAD_BYTES, MAX_VIDEO_FRAMES,
 )
-from app.core.database import db
+from app.core.database import db, resolve_data_path, store_data_path
 from app.core.security import project_guard
 from app.features.face_landmark_vf50 import SCHEMA_ID as FACE_SCHEMA_ID
 from app.features.face_landmark_vf50.services.ingestion import parse_face_annotations
@@ -159,9 +159,9 @@ def upload_dataset(
                     Path(file.filename).stem,
                     "ready",
                     len(images),
-                    str(location),
+                    store_data_path(location),
                     schema_id,
-                    str(annotation_path) if annotation_path else None,
+                    store_data_path(annotation_path) if annotation_path else None,
                     int(time.time()),
                 ),
             )
@@ -290,14 +290,14 @@ def upload_video_dataset(
                      (id, project_id, name, status, image_count, storage_path, schema_id, annotation_path, created_at)
                    VALUES (?, ?, ?, 'processing', 0, ?, ?, ?, ?)""",
                 (dataset_id, project_id, Path(file.filename or "video").stem,
-                 str(images_root), schema_id, str(annotation_path) if annotation_path else None, now),
+                 store_data_path(images_root), schema_id, store_data_path(annotation_path) if annotation_path else None, now),
             )
             conn.execute(
                 """INSERT INTO video_import_jobs (
                      id, dataset_id, attempt, status, progress, staging_path,
                      max_frames, max_decoded_bytes, created_at
                    ) VALUES (?, ?, 1, 'pending', 0, ?, ?, ?, ?)""",
-                (job_id, dataset_id, str(staging_path), MAX_VIDEO_FRAMES, MAX_DECODED_VIDEO_BYTES, now),
+                (job_id, dataset_id, store_data_path(staging_path), MAX_VIDEO_FRAMES, MAX_DECODED_VIDEO_BYTES, now),
             )
         background.add_task(execute_video_import, job_id)
         return {
@@ -353,14 +353,14 @@ def retry_video_import(
             raise HTTPException(404, "Video import job not found")
         attempt = previous["attempt"] + 1
         job_id = str(uuid.uuid4())
-        staging_path = Path(dataset["storage_path"]).parent / "staging" / f"attempt-{attempt}"
+        staging_path = resolve_data_path(dataset["storage_path"]).parent / "staging" / f"attempt-{attempt}"
         conn.execute("UPDATE datasets SET status = 'processing', image_count = 0 WHERE id = ?", (dataset_id,))
         conn.execute(
             """INSERT INTO video_import_jobs (
                  id, dataset_id, attempt, status, progress, staging_path,
                  max_frames, max_decoded_bytes, created_at
                ) VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)""",
-            (job_id, dataset_id, attempt, str(staging_path), previous["max_frames"],
+            (job_id, dataset_id, attempt, store_data_path(staging_path), previous["max_frames"],
              previous["max_decoded_bytes"], int(time.time())),
         )
     background.add_task(execute_video_import, job_id)
@@ -448,7 +448,7 @@ def get_image(
     if not dataset:
         raise HTTPException(404, "Dataset not found")
 
-    root = Path(dataset["storage_path"]).resolve()
+    root = resolve_data_path(dataset["storage_path"])
     target = (root / image_path).resolve()
 
     if root not in target.parents or not target.is_file() or target.suffix.lower() not in IMAGE_EXTENSIONS:

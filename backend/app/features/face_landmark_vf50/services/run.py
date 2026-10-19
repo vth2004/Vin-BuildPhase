@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.core.database import db
+from app.core.database import db, resolve_data_path
 from app.shared.temporal.tracking import DetectionTracker, assign_one_to_one
 from app.shared.temporal.segmentation import is_scene_cut, luminance_histogram
 from app.shared.temporal.service import process_temporal_run
@@ -206,7 +206,7 @@ def execute_face_run(run_id: str) -> None:
             (run_id,),
         )
 
-    root = Path(dataset["storage_path"]).resolve()
+    root = resolve_data_path(dataset["storage_path"])
     trackers: dict[str, DetectionTracker] = {}
     previous_frame: dict[str, tuple[int | None, int, int]] = {}
     previous_keypoints: dict[str, dict[int, dict[str, Any]]] = {}

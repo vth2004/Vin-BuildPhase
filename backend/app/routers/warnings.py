@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from app.core.database import db
+from app.core.database import db, resolve_data_path
 from app.core.security import project_guard
 from app.schemas.warning import ReviewWarning
 from app.features.human_pose.services.dataset import load_schema
@@ -170,7 +170,7 @@ def export_dataset(
             "SELECT annotation_path, schema_id FROM datasets WHERE id = ?",
             (run["dataset_id"],),
         ).fetchone()
-        if not dataset or not dataset["annotation_path"] or not Path(dataset["annotation_path"]).is_file():
+        if not dataset or not dataset["annotation_path"] or not resolve_data_path(dataset["annotation_path"]).is_file():
             raise HTTPException(404, "Annotation file not found")
         reviewed = conn.execute(
             """SELECT id, image_name, keypoint, suggested_x, suggested_y, review, annotation_id
@@ -199,7 +199,7 @@ def export_dataset(
                 updates[img_name] = {}
             updates[img_name][kp_id] = (rw["suggested_x"], rw["suggested_y"])
 
-    raw = Path(dataset["annotation_path"]).read_text(encoding="utf-8")
+    raw = resolve_data_path(dataset["annotation_path"]).read_text(encoding="utf-8")
     payload = json.loads(raw)
     is_coco = (
         isinstance(payload.get("images"), list)

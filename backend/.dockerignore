@@ -1,0 +1,13 @@
+.venv/
+data/
+models/
+*.pt
+*.onnx
+*.task
+*.db
+*.sqlite3
+__pycache__/
+tests/
+scripts/
+*.zip
+*.log

@@ -3,6 +3,9 @@
 .env.*
 **/.env
 **/.env.*
+!.env.example
+!**/.env.example
+.deploy.env
 *.pem
 *.key
 secrets.json
@@ -34,6 +37,8 @@ backend/.venv/
 
 # ============ Data, DB, Uploads (user data + sqlite) ============
 backend/data/
+deploy-data/
+deploy-models/
 *.sqlite3
 *.db
 *.sqlite

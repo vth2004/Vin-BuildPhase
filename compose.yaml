@@ -1,0 +1,35 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      LANDMARK_DATA_DIR: /app/data
+      POSE_MODEL_PATH: /models/yolo26s-pose.pt
+      FACE_LANDMARKER_MODEL_PATH: /models/face_landmarker.task
+      RTMPOSE_DET_MODEL_PATH: /models/yolox_m_8xb8-300e_humanart-c2c7a14a.onnx
+      RTMPOSE_POSE_MODEL_PATH: /models/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.onnx
+      QA_ENSEMBLE_MODE: K2
+      CORS_ORIGINS: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      MAX_VIDEO_FRAMES: ${MAX_VIDEO_FRAMES:-10000}
+      MAX_DECODED_VIDEO_BYTES: ${MAX_DECODED_VIDEO_BYTES:-5368709120}
+    volumes:
+      - ./deploy-data:/app/data
+      - ./deploy-models:/models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: /api
+    ports:
+      - "${APP_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

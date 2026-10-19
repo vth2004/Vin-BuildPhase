@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -96,13 +97,39 @@ class VideoIngestionApiTests(unittest.TestCase):
             media_path = conn.execute("SELECT media_path FROM sequences WHERE dataset_id = ?", (payload["id"],)).fetchone()[0]
         self.assertEqual(list(range(4)), [row["original_frame_index"] for row in rows])
         self.assertTrue(all(row["timestamp_source"] in {"video_timestamp", "fps_derived"} for row in rows))
-        self.assertTrue(Path(media_path).is_file())
+        self.assertFalse(Path(media_path).is_absolute())
+        self.assertTrue(database.resolve_data_path(media_path).is_file())
         image_response = self.client.get(
             f"/api/projects/{self.project_id}/datasets/{payload['id']}/images/{rows[0]['file_name']}", headers=self.headers,
         )
         self.assertEqual(200, image_response.status_code)
         with Image.open(io.BytesIO(image_response.content)) as image:
             self.assertEqual((48, 32), image.size)
+
+    def test_video_data_paths_survive_moving_the_data_directory(self) -> None:
+        response = self.client.post(
+            f"/api/projects/{self.project_id}/datasets/video", headers=self.headers,
+            data={"schema_id": "vf_humanpose17_v1"},
+            files={"file": ("walk.avi", small_avi(self.root), "video/x-msvideo")},
+        )
+        self.assertEqual(202, response.status_code, response.text)
+        dataset_id = response.json()["id"]
+        with database.db() as conn:
+            dataset = conn.execute("SELECT storage_path FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
+            sequence = conn.execute("SELECT media_path FROM sequences WHERE dataset_id = ?", (dataset_id,)).fetchone()
+            image = conn.execute("SELECT file_name FROM images WHERE dataset_id = ? LIMIT 1", (dataset_id,)).fetchone()
+        self.assertFalse(Path(dataset["storage_path"]).is_absolute())
+        self.assertFalse(Path(sequence["media_path"]).is_absolute())
+        with tempfile.TemporaryDirectory() as temporary:
+            relocated = Path(temporary) / "landmark-data"
+            shutil.copytree(self.root, relocated)
+            with patch.object(database, "DATA_DIR", relocated), patch.object(database, "DB_PATH", relocated / "test.sqlite3"):
+                image_response = self.client.get(
+                    f"/api/projects/{self.project_id}/datasets/{dataset_id}/images/{image['file_name']}",
+                    headers=self.headers,
+                )
+                self.assertEqual(200, image_response.status_code, image_response.text)
+                self.assertTrue(database.resolve_data_path(sequence["media_path"]).is_file())
 
     def test_corrupt_and_unsupported_video_do_not_create_dataset(self) -> None:
         corrupt = self.client.post(
@@ -156,7 +183,7 @@ class VideoIngestionApiTests(unittest.TestCase):
                 "SELECT annotation_path FROM datasets WHERE id = ?", (payload["id"],),
             ).fetchone()[0]
         self.assertEqual([2, "person-7", "track-3"], list(row))
-        self.assertEqual("must-not-be-used.jpg", json.loads(Path(annotation_path).read_text())["images"][0]["file_name"])
+        self.assertEqual("must-not-be-used.jpg", json.loads(database.resolve_data_path(annotation_path).read_text())["images"][0]["file_name"])
 
     def test_face_annotation_maps_by_explicit_original_frame_index(self) -> None:
         points = [
@@ -226,10 +253,10 @@ class VideoIngestionApiTests(unittest.TestCase):
         self.assertEqual("failed", payload["job"]["status"])
         self.assertIn("frame quota", payload["job"]["error_message"])
         with database.db() as conn:
-            storage = Path(conn.execute(
+            storage = database.resolve_data_path(conn.execute(
                 "SELECT storage_path FROM datasets WHERE id = ?", (response.json()["id"],),
             ).fetchone()[0])
-            staging = Path(conn.execute(
+            staging = database.resolve_data_path(conn.execute(
                 "SELECT staging_path FROM video_import_jobs WHERE dataset_id = ?", (response.json()["id"],),
             ).fetchone()[0])
         self.assertFalse(storage.exists())
@@ -243,7 +270,7 @@ class VideoIngestionApiTests(unittest.TestCase):
         )
         dataset_id = response.json()["id"]
         with database.db() as conn:
-            storage = Path(conn.execute(
+            storage = database.resolve_data_path(conn.execute(
                 "SELECT storage_path FROM datasets WHERE id = ?", (dataset_id,),
             ).fetchone()[0])
         (storage.parent / "source_video.avi").write_bytes(small_avi(self.root))

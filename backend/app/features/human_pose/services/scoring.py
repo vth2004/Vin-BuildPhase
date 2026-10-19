@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from app.core.database import resolve_data_path
+
 from .observations import build_pose_observations
 from app.shared.ai_drafts import apply_temporal_prediction_qc
 from app.shared.temporal.tracking import DetectionTracker, assign_one_to_one, bbox_iou, item_center, item_scale
@@ -136,7 +138,7 @@ def _run_unlabeled_pose(
         ).fetchall()
         conn.execute("DELETE FROM ai_draft_results WHERE run_id = ?", (run_id,))
         conn.execute("DELETE FROM temporal_observations WHERE run_id = ?", (run_id,))
-    root = Path(dataset["storage_path"]).resolve()
+    root = resolve_data_path(dataset["storage_path"])
     trackers: dict[str, DetectionTracker] = {}
     previous: dict[str, tuple[int | None, int | None, int | None]] = {}
     for position, image in enumerate(images):
@@ -256,7 +258,7 @@ def run_scoring(
         _run_unlabeled_pose(run_id, dataset, run, predictors, db_factory)
         return
 
-    storage_root = Path(dataset["storage_path"]).resolve()
+    storage_root = resolve_data_path(dataset["storage_path"])
     keypoint_meta = {kp["id"]: kp for kp in schema["keypoints"]}
     total_images = len(image_rows)
 

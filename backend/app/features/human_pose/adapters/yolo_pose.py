@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import os
 import numpy as np
 
 from .base import BasePosePredictor
@@ -36,7 +37,8 @@ class YoloPoseAdapter(BasePosePredictor):
 
         backend_dir = Path(__file__).resolve().parents[4]
         candidate_path = backend_dir / model_name
-        target = str(candidate_path) if candidate_path.is_file() else model_name
+        configured = os.getenv("POSE_MODEL_PATH") if model_name == "yolo26s-pose.pt" else None
+        target = configured or (str(candidate_path) if candidate_path.is_file() else model_name)
 
         self.model = YOLO(target)
 
