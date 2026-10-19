@@ -5,7 +5,7 @@ import time
 import uuid
 
 from app.core.database import db
-from .dataset import load_schema
+from app.shared.datasets.schemas import load_schema
 
 
 def make_mock_results(run_id: str) -> None:

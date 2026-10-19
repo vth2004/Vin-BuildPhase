@@ -6,15 +6,9 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from fastapi import HTTPException, UploadFile
 
-from app.core.config import SCHEMAS_DIR, MAX_UPLOAD_BYTES, MAX_FILES_PER_ZIP, IMAGE_EXTENSIONS
+from app.core.config import MAX_UPLOAD_BYTES, MAX_FILES_PER_ZIP, IMAGE_EXTENSIONS
+from app.shared.datasets.schemas import load_schema
 from ..adapters.yolo_pose import COCO_TO_VF17
-
-
-def load_schema(schema_id: str) -> dict:
-    path = SCHEMAS_DIR / f"{schema_id}.json"
-    if not path.is_file():
-        raise HTTPException(400, f"Unsupported schema_id: {schema_id}")
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 FACE_CATEGORY_HINTS = {

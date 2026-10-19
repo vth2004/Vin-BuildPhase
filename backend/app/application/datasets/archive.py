@@ -8,9 +8,8 @@ from pathlib import Path
 from fastapi import HTTPException, UploadFile
 from app.core.config import MAX_UPLOAD_BYTES
 from app.core.database import db, store_data_path
-from app.features.face_landmark_vf50 import SCHEMA_ID as FACE_SCHEMA_ID
-from app.features.face_landmark_vf50.services.ingestion import parse_face_annotations
-from app.features.human_pose.services.dataset import load_schema, validate_annotations
+from app.shared.datasets.schemas import load_schema
+from .formats import parse_annotations
 from app.shared.datasets import safe_extract_dataset, validate_exif_orientation
 from app.shared.temporal import infer_sequences, parse_sequence_manifest
 from .sequences import _sequence_summary
@@ -19,7 +18,7 @@ def upload_dataset(project_id: str, file: UploadFile, schema_id: UploadFile, ann
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(400, "Upload a .zip file")
 
-    schema = load_schema(schema_id)
+    load_schema(schema_id)
     dataset_id = str(uuid.uuid4())
     location = data_dir / "projects" / project_id / "datasets" / dataset_id / "images"
     location.mkdir(parents=True, exist_ok=False)
@@ -38,36 +37,7 @@ def upload_dataset(project_id: str, file: UploadFile, schema_id: UploadFile, ann
         if raw_annotation and len(raw_annotation) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "Annotation JSON exceeds 500 MB limit")
 
-        if schema_id == FACE_SCHEMA_ID:
-            validated = parse_face_annotations(raw_annotation, set(images)) if raw_annotation else []
-            records_by_name = {record["file_name"]: record for record in validated}
-            validated = [
-                records_by_name.get(name, {
-                    "file_name": name,
-                    "width": None,
-                    "height": None,
-                    "annotations": [],
-                })
-                for name in images
-            ]
-        else:
-            if not raw_annotation:
-                validated = [
-                    {"file_name": name, "width": None, "height": None, "annotations": []}
-                    for name in images
-                ]
-            elif raw_annotation.lstrip().startswith(b"<"):
-                raise HTTPException(
-                    400,
-                    "File annotation XML này thuộc định dạng Face Landmark (CVAT XML). "
-                    "Phân hệ Human Pose chỉ hỗ trợ file JSON COCO 17 điểm. Vui lòng chuyển sang phân hệ Face Landmark.",
-                )
-            else:
-                try:
-                    annotation_payload = json.loads(raw_annotation)
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise HTTPException(400, "Annotation file is not valid JSON") from error
-                validated = validate_annotations(annotation_payload, schema, set(images))
+        validated = parse_annotations(schema_id, raw_annotation, images, source="archive")
 
         validate_exif_orientation(location, validated)
 

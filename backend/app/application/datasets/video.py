@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import HTTPException, UploadFile
 from app.core.config import MAX_UPLOAD_BYTES
 from app.core.database import db, resolve_data_path, store_data_path
-from app.features.human_pose.services.dataset import load_schema
+from app.shared.datasets.schemas import load_schema
 from app.shared.video import VIDEO_EXTENSIONS
 
 def upload_video_dataset(project_id: str, file: UploadFile, schema_id: UploadFile, annotation_file: UploadFile | None, data_dir: Path, max_frames: int, max_decoded_bytes: int) -> dict:

@@ -8,7 +8,7 @@ from app.core.config import DATA_DIR, MAX_DECODED_VIDEO_BYTES, MAX_VIDEO_FRAMES
 from app.core.security import project_guard
 from app.schemas.dataset import SequenceConfirmation
 from app.application.datasets import archive, video, sequences, images
-from app.shared.video_import import execute_video_import
+from app.application.datasets.import_job import execute_video_import
 
 router = APIRouter(prefix="/api/projects/{project_id}/datasets", tags=["datasets"])
 

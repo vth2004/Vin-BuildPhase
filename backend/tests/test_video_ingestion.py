@@ -23,7 +23,7 @@ from app.core import database
 from app.main import app
 from app.routers import datasets as datasets_router
 from app.shared.video import VideoDecodeError, decode_video
-from app.shared.video_import import recover_interrupted_video_imports
+from app.application.datasets.import_job import recover_interrupted_video_imports
 
 
 def small_avi(directory: Path, frame_count: int = 4) -> bytes:

@@ -4,7 +4,7 @@ import json
 from fastapi import HTTPException
 from app.core.database import db
 from app.schemas.warning import ReviewWarning
-from app.features.human_pose.services.dataset import load_schema
+from app.shared.datasets.schemas import load_schema
 
 
 def list_warnings(project_id: str, run_id: str) -> list[dict]:

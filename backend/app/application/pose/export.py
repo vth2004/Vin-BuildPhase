@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import quote
 from fastapi import HTTPException
 from app.core.database import db, resolve_data_path
-from app.features.human_pose.services.dataset import load_schema
+from app.shared.datasets.schemas import load_schema
 from app.features.human_pose.adapters.yolo_pose import COCO_TO_VF17
 
 VF_TO_COCO17 = {vf_id: coco_id for coco_id, (vf_id, _) in COCO_TO_VF17.items()}

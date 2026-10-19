@@ -11,7 +11,7 @@ from app.features.face_landmark_vf50.services.run import execute_face_run
 from app.routers import ai_drafts, datasets, projects, runs, temporal, warnings
 from app.features.human_pose.services.run import execute_run as execute_human_pose_run
 from app.shared.jobs import register_run_handler
-from app.shared.video_import import recover_interrupted_video_imports
+from app.application.datasets.import_job import recover_interrupted_video_imports
 
 app = FastAPI(title="Landmark QA API", version="0.1.0")
 

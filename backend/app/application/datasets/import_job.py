@@ -8,9 +8,7 @@ import uuid
 from pathlib import Path
 
 from app.core.database import db, resolve_data_path, store_data_path
-from app.features.face_landmark_vf50 import SCHEMA_ID as FACE_SCHEMA_ID
-from app.features.face_landmark_vf50.services.ingestion import parse_face_annotations
-from app.features.human_pose.services.dataset import load_schema, validate_annotations
+from .formats import parse_annotations
 from app.shared.video import VideoAnnotationError, VideoDecodeError, decode_video, prepare_video_annotation
 
 logger = logging.getLogger(__name__)
@@ -52,13 +50,9 @@ def execute_video_import(job_id: str) -> None:
         if job["annotation_path"]:
             raw_annotation = resolve_data_path(job["annotation_path"]).read_bytes()
             normalized = prepare_video_annotation(raw_annotation, len(decoded.frames))
-            image_names = {frame.file_name for frame in decoded.frames}
-            if job["schema_id"] == FACE_SCHEMA_ID:
-                validated = parse_face_annotations(normalized, image_names)
-            else:
-                if normalized.lstrip().startswith(b"<"):
-                    raise VideoAnnotationError("Human Pose video annotations must use a supported JSON format")
-                validated = validate_annotations(json.loads(normalized), load_schema(job["schema_id"]), image_names)
+            validated = parse_annotations(
+                job["schema_id"], normalized, [frame.file_name for frame in decoded.frames], source="video",
+            )
 
         shutil.rmtree(final_images, ignore_errors=True)
         staging_frames.replace(final_images)
