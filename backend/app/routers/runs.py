@@ -60,7 +60,7 @@ def create_run(
         if dataset["status"] != "ready":
             raise HTTPException(409, f"Dataset is not ready (status: {dataset['status']})")
         try:
-            validate_window_size(window_size)
+            validate_window_size(window_size, 69 if dataset["schema_id"] == FACE_SCHEMA_ID else 29)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         if temporal_enabled:

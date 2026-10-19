@@ -98,7 +98,7 @@ class TemporalApiTests(unittest.TestCase):
         run = self._create_run()
         self.assertTrue(run["temporal_enabled"])
         self.assertEqual(7, run["temporal_window_size"])
-        self.assertEqual("robust-local-fit-v1", run["temporal_algorithm_version"])
+        self.assertEqual("robust-local-fit-v2", run["temporal_algorithm_version"])
         with patch("app.routers.runs.dispatch_run"):
             invalid = self.client.post(f"/api/projects/{self.project_id}/runs", headers=self.headers,
                                        params={"dataset_id": self.dataset_id, "temporal_enabled": True, "window_size": 6})

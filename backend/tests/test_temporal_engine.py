@@ -49,6 +49,9 @@ class TemporalEngineTests(unittest.TestCase):
         for value in (3, 4, 6, 30, True):
             with self.assertRaises(ValueError):
                 validate_window_size(value)
+        validate_window_size(69, max_window_size=69)
+        with self.assertRaises(ValueError):
+            validate_window_size(70, max_window_size=69)
         for value in (5, 29):
             frames = [_pose_frame(i, 0.2) for i in range(value)]
             self.assertEqual("available", estimate_keypoint(frames, value // 2, 1, feature="pose",
@@ -122,6 +125,15 @@ class TemporalEngineTests(unittest.TestCase):
         self.assertEqual("iod", normalization_transform(face[3], "face").source)
         estimate = estimate_keypoint(face, 3, 1, feature="face", window_size=7)
         self.assertTrue(math.isclose(estimate.coordinate[0], 206 + 0.3 * 40, abs_tol=1e-5))
+
+    def test_face_uses_only_nearest_support_and_rejects_low_quality(self) -> None:
+        face = [_face_frame(i, 0.2 + i * 0.01) for i in range(25)]
+        estimate = estimate_keypoint(face, 12, 1, feature="face", window_size=25)
+        self.assertEqual(11, estimate.support_count)
+        weak = [ObservationFrame(frame.frame_index, frame.keypoints, frame.bbox, quality=0.1)
+                for frame in face]
+        rejected = estimate_keypoint(weak, 12, 1, feature="face", window_size=25)
+        self.assertEqual("low_quality", rejected.unavailable_reason)
 
     def test_batch_returns_result_for_every_requested_point(self) -> None:
         frames = [_pose_frame(i, 0.2) for i in range(7)]

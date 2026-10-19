@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 import numpy as np
 
-TEMPORAL_ALGORITHM_VERSION = "robust-local-fit-v1"
+TEMPORAL_ALGORITHM_VERSION = "robust-local-fit-v2"
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,8 @@ class TemporalEngineConfig:
     max_gap_frames_with_time: int = 5
     max_gap_us: int = 200_000
     max_gap_frames_without_time: int = 3
+    max_face_support_observations: int = 11
+    min_face_estimate_quality: float = 0.35
 
 
 DEFAULT_TEMPORAL_CONFIG = TemporalEngineConfig()
@@ -63,9 +65,10 @@ class TemporalEstimate:
     algorithm_version: str = TEMPORAL_ALGORITHM_VERSION
 
 
-def validate_window_size(window_size: int) -> None:
-    if isinstance(window_size, bool) or not isinstance(window_size, int) or window_size < 5 or window_size > 29 or window_size % 2 == 0:
-        raise ValueError("window_size must be an odd integer from 5 through 29")
+def validate_window_size(window_size: int, max_window_size: int = 29) -> None:
+    if (isinstance(window_size, bool) or not isinstance(window_size, int) or window_size < 5
+            or window_size > max_window_size or window_size % 2 == 0):
+        raise ValueError(f"window_size must be an odd integer from 5 through {max_window_size}")
 
 
 def _point(frame: ObservationFrame, point_id: int) -> tuple[float, float] | None:
@@ -170,7 +173,7 @@ def _unavailable(reason: str, *, support: int = 0, gap_frames: int | None = None
 def estimate_keypoint(frames: list[ObservationFrame], target_position: int, point_id: int, *,
                       feature: Literal["pose", "face"], window_size: int = 15,
                       config: TemporalEngineConfig = DEFAULT_TEMPORAL_CONFIG) -> TemporalEstimate:
-    validate_window_size(window_size)
+    validate_window_size(window_size, 69 if feature == "face" else 29)
     if target_position < 0 or target_position >= len(frames):
         raise IndexError("target_position is outside frames")
     target = frames[target_position]
@@ -194,6 +197,13 @@ def estimate_keypoint(frames: list[ObservationFrame], target_position: int, poin
         observations.append((frame, transform, point))
     if len(observations) < 2:
         return _unavailable("low_support", support=len(observations), normalization=target_transform.source)
+
+    if feature == "face" and len(observations) > config.max_face_support_observations:
+        observations = sorted(
+            observations,
+            key=lambda item: abs(item[0].frame_index - target.frame_index),
+        )[:config.max_face_support_observations]
+        observations.sort(key=lambda item: item[0].frame_index)
 
     left = [item for item in observations if item[0].frame_index < target.frame_index]
     right = [item for item in observations if item[0].frame_index > target.frame_index]
@@ -245,6 +255,13 @@ def estimate_keypoint(frames: list[ObservationFrame], target_position: int, poin
                   target_transform.origin_y + float(predicted[1]) * target_transform.scale)
     support_factor = min(1.0, len(observations) / 5.0)
     quality = support_factor * float(np.mean(qualities)) * math.exp(-min(residual, 5.0) * config.quality_residual_decay)
+    if feature == "face":
+        side_balance = min(len(left), len(right)) / max(len(left), len(right)) if method == "interpolation" else 0.6
+        gap_penalty = math.exp(-0.15 * max(gap_frames or 0, 0))
+        quality *= side_balance * gap_penalty * math.exp(-5.0 * min(residual, 1.0))
+        if quality < config.min_face_estimate_quality:
+            return _unavailable("low_quality", support=len(observations), gap_frames=gap_frames,
+                                gap_us=gap_us, normalization=target_transform.source, time_source=time_source)
     return TemporalEstimate(coordinate, "available", method, None, min(1.0, max(0.0, quality)),
                             len(observations), residual, gap_frames, gap_us,
                             target_transform.source, time_source, degree)
@@ -253,7 +270,7 @@ def estimate_keypoint(frames: list[ObservationFrame], target_position: int, poin
 def estimate_track(frames: list[ObservationFrame], point_ids: list[int], *, feature: Literal["pose", "face"],
                    window_size: int = 15, config: TemporalEngineConfig = DEFAULT_TEMPORAL_CONFIG) -> dict[tuple[int, int], TemporalEstimate]:
     """Return an explicit estimate or rejection reason for every requested frame/keypoint pair."""
-    validate_window_size(window_size)
+    validate_window_size(window_size, 69 if feature == "face" else 29)
     return {
         (position, point_id): estimate_keypoint(frames, position, point_id, feature=feature,
                                                 window_size=window_size, config=config)

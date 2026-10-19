@@ -24,8 +24,9 @@ class TemporalReviewRequest(BaseModel):
 
 def _review_target(conn: sqlite3.Connection, run_id: str, result_id: str) -> tuple[sqlite3.Row, dict]:
     row = conn.execute(
-        """SELECT t.*, a.keypoints_json FROM temporal_results t
+        """SELECT t.*, a.keypoints_json, d.schema_id FROM temporal_results t
            JOIN runs r ON r.id = t.run_id
+           JOIN datasets d ON d.id = r.dataset_id
            JOIN images i ON i.id = t.image_id AND i.dataset_id = r.dataset_id
            JOIN annotations a ON a.id = t.annotation_id AND a.image_id = i.id
            WHERE t.id = ? AND t.run_id = ?""", (result_id, run_id),
@@ -65,6 +66,9 @@ def set_temporal_review(project_id: str, run_id: str, result_id: str, payload: T
         if payload.source == "temporal":
             if row["estimate_status"] != "available" or row["temporal_x"] is None or row["temporal_y"] is None:
                 raise HTTPException(409, "Temporal estimate is unavailable")
+            if (row["schema_id"] == "vf_face_landmark50_v1"
+                    and (not row["evidence"] or float(row["temporal_quality"] or 0.0) < 0.45)):
+                raise HTTPException(409, "Face temporal estimate does not have enough reliable evidence")
             selected = (row["temporal_x"], row["temporal_y"])
         else:
             selected = (point.get("x"), point.get("y"))

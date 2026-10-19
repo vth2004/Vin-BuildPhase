@@ -18,6 +18,35 @@ def _mapping(raw: str) -> dict[int, dict[str, Any]]:
     return {int(key): point for key, point in value.items()}
 
 
+def _observation_quality(keypoints: dict[int, dict[str, Any]], feature: str,
+                         tracking_status: str, disagreement: float) -> float:
+    explicit = [float(point["conf"]) for point in keypoints.values() if point.get("conf") is not None]
+    if explicit:
+        base = sum(explicit) / len(explicit)
+    elif feature == "face":
+        # MediaPipe Face does not expose calibrated per-landmark confidence. Keep this
+        # explicitly heuristic and capped instead of pretending every point is 1.0.
+        completeness = min(1.0, len(keypoints) / 50.0)
+        base = 0.65 * completeness
+    else:
+        base = 0.5
+    if tracking_status != "confirmed":
+        base *= 0.55
+    return min(1.0, max(0.0, base * math.exp(-float(disagreement or 0.0))))
+
+
+def _face_tolerance(point_id: int) -> float:
+    if 0 <= point_id <= 9:   # eyebrows
+        return 0.20
+    if 10 <= point_id <= 13:  # nose bridge
+        return 0.16
+    if 14 <= point_id <= 29:  # eyes
+        return 0.14
+    if 30 <= point_id <= 41:  # outer lip
+        return 0.14
+    return 0.12  # inner lip
+
+
 def _annotation_jitter(frames: list[ObservationFrame], annotations: list[dict[int, dict[str, Any]] | None],
                        position: int, point_id: int, feature: str) -> float | None:
     if position == 0 or position >= len(frames) - 1:
@@ -75,8 +104,7 @@ def process_temporal_run(run_id: str, feature: str, point_ids: list[int],
         annotations = []
         for row in track_rows:
             keypoints = _mapping(row["keypoints_json"])
-            confidence = [float(point.get("conf", 1.0)) for point in keypoints.values()]
-            quality = (sum(confidence) / len(confidence) if confidence else 0.5) * math.exp(-float(row["ensemble_disagreement"] or 0.0))
+            quality = _observation_quality(keypoints, feature, row["tracking_status"], row["ensemble_disagreement"])
             frames.append(ObservationFrame(
                 int(row["original_frame_index"]), keypoints, json.loads(row["bbox_json"] or "null"),
                 row["timestamp_us"], row["timestamp_source"], row["width"], row["height"], quality,
@@ -98,8 +126,18 @@ def process_temporal_run(run_id: str, feature: str, point_ids: list[int],
                 evidence = None
                 if estimate.coordinate and human and human.get("x") is not None and human.get("y") is not None and transform:
                     distance = math.dist((float(human["x"]), float(human["y"])), estimate.coordinate) / transform.scale
-                    score = min(1.0, distance / 0.25) * estimate.temporal_quality
-                    if score >= 0.60 and estimate.temporal_quality >= 0.35:
+                    tolerance = _face_tolerance(point_id) if feature == "face" else 0.25
+                    score = min(1.0, distance / tolerance) * estimate.temporal_quality
+                    raw_distance = (math.dist((float(raw["x"]), float(raw["y"])), estimate.coordinate) / transform.scale
+                                    if raw and raw.get("x") is not None and raw.get("y") is not None else None)
+                    human_state = human.get("state", "visible")
+                    model_supports_reference = (
+                        feature != "face"
+                        or human_state == "occluded"
+                        or (raw_distance is not None and raw_distance <= tolerance
+                            and distance > raw_distance + tolerance * 0.25)
+                    )
+                    if score >= 0.50 and estimate.temporal_quality >= 0.45 and model_supports_reference:
                         evidence = "model_trajectory"
                 jitter = _annotation_jitter(frames, annotations, position, point_id, feature)
                 if evidence is None and jitter is not None and jitter >= 0.30:
