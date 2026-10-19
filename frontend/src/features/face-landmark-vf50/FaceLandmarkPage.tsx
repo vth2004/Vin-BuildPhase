@@ -1,3 +1,4 @@
+import { readSession } from '../../shared/session'
 import { FormEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -5,17 +6,8 @@ import type { Dataset, FaceResultDetail, FaceResultSummary, FaceRun, Point, Sess
 import { RULE_CODES, VF50_EDGES, VF50_GROUPS } from './vf50'
 import './face.css'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+import { API, requestJson } from '../../shared/api'
 type PointDisplayMode = 'suspect' | 'all'
-
-function savedSession(): Session | null {
-  try {
-    const raw = localStorage.getItem('landmark-session')
-    return raw ? JSON.parse(raw) : null
-  } catch {
-    return null
-  }
-}
 
 function pointAt(points: Record<string, Point>, id: number): Point | undefined {
   return points[String(id)]
@@ -40,7 +32,7 @@ function pointGroup(id: number): string {
 }
 
 export default function FaceLandmarkPage() {
-  const session = savedSession()
+  const session = readSession()
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [datasetId, setDatasetId] = useState('')
   const [runs, setRuns] = useState<FaceRun[]>([])
@@ -68,17 +60,8 @@ export default function FaceLandmarkPage() {
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
 
   const authHeaders = () => ({ Authorization: `Bearer ${session?.recoveryKey || ''}` })
-  const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
-    const response = await fetch(`${API}${path}`, {
-      ...init,
-      headers: { ...authHeaders(), ...(init.headers || {}) },
-    })
-    if (!response.ok) {
-      const detail = (await response.json().catch(() => null))?.detail
-      throw new Error(detail || `Request failed (${response.status})`)
-    }
-    return response.json()
-  }
+  const request = <T,>(path: string, init: RequestInit = {}): Promise<T> =>
+    requestJson<T>(path, init, session?.recoveryKey)
 
   const loadProject = async () => {
     if (!session) return

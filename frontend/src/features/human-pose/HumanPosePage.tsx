@@ -1,8 +1,9 @@
+import { readSession, saveSession, clearSession } from '../../shared/session'
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+import { API, requestJson } from '../../shared/api'
 
-type Dataset = { id: string; name: string; status: string; image_count: number; schema_id: string }
+import type { Dataset, Session } from '../../shared/types'
 
 type Warning = {
   id: string
@@ -35,8 +36,6 @@ type ImageDetails = {
   height: number
 }
 
-type Session = { projectId: string; recoveryKey: string; projectName: string }
-
 const KEYPOINT_SIGMA_MAP: Record<string, { sigma: number; label: string }> = {
   nose: { sigma: 0.026, label: 'Rất hẹp' },
   r_eye: { sigma: 0.025, label: 'Rất hẹp' },
@@ -57,13 +56,8 @@ const KEYPOINT_SIGMA_MAP: Record<string, { sigma: number; label: string }> = {
   l_ankle: { sigma: 0.089, label: 'Rộng' },
 }
 
-const saved = (): Session | null => {
-  const raw = localStorage.getItem('landmark-session')
-  return raw ? JSON.parse(raw) : null
-}
-
 export default function HumanPosePage() {
-  const [session, setSession] = useState<Session | null>(saved())
+  const [session, setSession] = useState<Session | null>(readSession)
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [annotationFile, setAnnotationFile] = useState<File | null>(null)
@@ -91,11 +85,8 @@ export default function HumanPosePage() {
 
   const headers = () => ({ Authorization: `Bearer ${session?.recoveryKey}` })
 
-  const request = async (path: string, init: RequestInit = {}) => {
-    const res = await fetch(`${API}${path}`, { ...init, headers: { ...headers(), ...(init.headers || {}) } })
-    if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail || 'Request failed')
-    return res.json()
-  }
+  const request = (path: string, init: RequestInit = {}) =>
+    requestJson<any>(path, init, session?.recoveryKey, 'Request failed')
 
   const loadProject = async () => {
     if (!session) return
@@ -186,7 +177,7 @@ export default function HumanPosePage() {
         body: JSON.stringify({ name }),
       })
       const next = { projectId: data.id, recoveryKey: data.recovery_key, projectName: data.name }
-      localStorage.setItem('landmark-session', JSON.stringify(next))
+      saveSession(next)
       setSession(next)
       setMessage('Lưu Recovery key của bạn để sử dụng khi quay lại.')
     } catch (e) {
@@ -206,7 +197,7 @@ export default function HumanPosePage() {
       if (!res.ok) throw new Error('Recovery key hoặc Project ID không hợp lệ')
       const data = await res.json()
       const next = { projectId: pId, recoveryKey: rKey, projectName: data.project.name }
-      localStorage.setItem('landmark-session', JSON.stringify(next))
+      saveSession(next)
       setSession(next)
       setMessage(`Đã mở lại project: ${data.project.name}`)
     } catch (e) {
@@ -461,7 +452,7 @@ export default function HumanPosePage() {
         <button
           className="btn-outline"
           onClick={() => {
-            localStorage.removeItem('landmark-session')
+            clearSession()
             setSession(null)
           }}
         >

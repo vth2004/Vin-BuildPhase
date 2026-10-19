@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 
 import './temporal.css'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+import { API, requestJson } from '../../shared/api'
 
-type Session = { projectId: string; recoveryKey: string }
+import type { ProjectCredentials as Session } from '../../shared/types'
 type TemporalItem = {
   id: string; file_name: string; frame_index: number; keypoint_id: number
   annotation_id?: string | null
@@ -41,12 +41,8 @@ export default function TemporalPanel({ session, runId, datasetId }: { session: 
   const [pageNumber, setPageNumber] = useState(1)
   const [resultTotal, setResultTotal] = useState(0)
 
-  const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
-    const response = await fetch(`${API}${path}`, { ...init, headers: { Authorization: `Bearer ${session.recoveryKey}`, ...(init.headers || {}) } })
-    if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || `HTTP ${response.status}`)
-    if (response.status === 204) return undefined as T
-    return response.json()
-  }
+  const request = <T,>(path: string, init: RequestInit = {}): Promise<T> =>
+    requestJson<T>(path, init, session.recoveryKey)
   const loadDetail = async (id: string) => {
     const detail = await request<Detail>(`/projects/${session.projectId}/runs/${runId}/temporal/results/${id}`)
     setSelected(detail)

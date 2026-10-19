@@ -1,5 +1,5 @@
-export type Session = { projectId: string; recoveryKey: string; projectName: string }
-export type Dataset = { id: string; name: string; status: string; image_count: number; schema_id: string }
+export type { Session } from '../../shared/types'
+export type { Dataset } from '../../shared/types'
 export type FaceRun = {
   id: string
   dataset_id: string

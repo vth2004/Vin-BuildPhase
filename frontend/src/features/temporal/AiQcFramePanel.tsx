@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { VF50_EDGES } from '../face-landmark-vf50/vf50'
 import './temporal.css'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+import { API, requestJson } from '../../shared/api'
 const POSE_EDGES: [number, number][] = [[1,2],[1,3],[2,4],[3,5],[4,6],[5,7],[6,7],[6,12],[7,13],[12,13],[6,8],[8,10],[7,9],[9,11],[12,14],[14,16],[13,15],[15,17]]
-type Session = { projectId: string; recoveryKey: string }
+import type { ProjectCredentials as Session } from '../../shared/types'
 type Point = { id: number; x?: number | null; y?: number | null; state?: string; confidence?: number | null }
 type Draft = { id: string; image_id: string; file_name: string; frame_index: number | null; instance_index: number; track_id?: string | null; keypoints: Point[]; qc: { flags?: string[] } }
 type TPoint = { image_id: string; internal_track_id: string; keypoint_id: number; temporal_x?: number | null; temporal_y?: number | null; estimate_status: string; unavailable_reason?: string | null; temporal_quality: number; support_count: number; residual?: number | null }
@@ -20,13 +20,11 @@ export default function AiQcFramePanel({ session, runId, datasetId, feature }: {
   useEffect(() => {
     let active = true
     const load = async () => {
-      const response = await fetch(`${API}/projects/${session.projectId}/runs/${runId}/ai-drafts`, { headers })
-      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || `HTTP ${response.status}`)
-      const payload = await response.json() as { items: Draft[] }, points: TPoint[] = []
+      const payload = await requestJson<{ items: Draft[] }>(`/projects/${session.projectId}/runs/${runId}/ai-drafts`, {}, session.recoveryKey)
+      const points: TPoint[] = []
       for (let page = 1; ; page += 1) {
-        const resultResponse = await fetch(`${API}/projects/${session.projectId}/runs/${runId}/temporal/results?page=${page}&page_size=200`, { headers })
-        if (!resultResponse.ok) throw new Error((await resultResponse.json().catch(() => null))?.detail || `HTTP ${resultResponse.status}`)
-        const result = await resultResponse.json() as { total: number; items: TPoint[] }; points.push(...result.items)
+        const result = await requestJson<{ total: number; items: TPoint[] }>(`/projects/${session.projectId}/runs/${runId}/temporal/results?page=${page}&page_size=200`, {}, session.recoveryKey)
+        points.push(...result.items)
         if (points.length >= result.total) break
       }
       if (active) { setDrafts(payload.items); setTemporal(points); setCursor(0); setSelected(null) }

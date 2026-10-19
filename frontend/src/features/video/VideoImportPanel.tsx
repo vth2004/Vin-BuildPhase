@@ -2,9 +2,9 @@ import { FormEvent, useEffect, useRef, useState } from 'react'
 
 import './video-import.css'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+import { requestJson } from '../../shared/api'
 
-type Session = { projectId: string; recoveryKey: string }
+import type { ProjectCredentials as Session } from '../../shared/types'
 type ImportState = {
   dataset: { id: string; status: string; image_count: number }
   job: {
@@ -35,18 +35,8 @@ export default function VideoImportPanel({ session, schemaId, annotationAccept, 
   const [busy, setBusy] = useState(false)
   const notifiedReady = useRef('')
 
-  const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
-    const response = await fetch(`${API}${path}`, {
-      ...init,
-      headers: { Authorization: `Bearer ${session.recoveryKey}`, ...(init.headers || {}) },
-    })
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      const detail = typeof payload?.detail === 'string' ? payload.detail : payload?.detail?.message
-      throw new Error(detail || `Request failed (${response.status})`)
-    }
-    return response.json()
-  }
+  const request = <T,>(path: string, init: RequestInit = {}): Promise<T> =>
+    requestJson<T>(path, init, session.recoveryKey)
 
   const refresh = async (target = datasetId) => {
     if (!target) return

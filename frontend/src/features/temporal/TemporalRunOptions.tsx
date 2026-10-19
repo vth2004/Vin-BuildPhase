@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import './temporal.css'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
-type Session = { projectId: string; recoveryKey: string }
+import { API, requestJson } from '../../shared/api'
+import type { ProjectCredentials as Session } from '../../shared/types'
 type Frame = { file_name: string; original_frame_index: number | null }
 type Sequence = { id: string; name: string; frame_count: number; frame_order_source: string; frame_deltas: number[]; confirmed_at: number | null; fps: number | null; requires_manifest: boolean; reason?: string | null; frames: Frame[] }
 type Summary = { temporal_ready: boolean; sequences: Sequence[] }
@@ -12,22 +12,18 @@ export default function TemporalRunOptions({ session, datasetId, enabled, window
   const [summary, setSummary] = useState<Summary | null>(null)
   const [fps, setFps] = useState('')
   const [message, setMessage] = useState('')
-  const headers = { Authorization: `Bearer ${session.recoveryKey}` }
   const load = async () => {
     if (!datasetId) return setSummary(null)
-    const response = await fetch(`${API}/projects/${session.projectId}/datasets/${datasetId}/sequences`, { headers })
-    if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || 'Không đọc được metadata sequence')
-    setSummary(await response.json())
+    setSummary(await requestJson<Summary>(`/projects/${session.projectId}/datasets/${datasetId}/sequences`, {}, session.recoveryKey, 'Không đọc được metadata sequence'))
   }
   useEffect(() => { load().catch(error => setMessage(error.message)) }, [datasetId])
   const confirm = async () => {
     const parsedFps = fps ? Number(fps) : null
-    const response = await fetch(`${API}/projects/${session.projectId}/datasets/${datasetId}/sequences/confirm`, {
-      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+    const next = await requestJson<Summary>(`/projects/${session.projectId}/datasets/${datasetId}/sequences/confirm`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fps: parsedFps, sampling_confirmed: parsedFps !== null, confirmation_source: 'ui_phase5' }),
-    })
-    if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || 'Xác nhận sequence thất bại')
-    setSummary(await response.json()); setMessage('Đã lưu xác nhận sequence và snapshot mapping.')
+    }, session.recoveryKey, 'Xác nhận sequence thất bại')
+    setSummary(next); setMessage('Đã lưu xác nhận sequence và snapshot mapping.')
   }
   const duration = useMemo(() => { const known = summary?.sequences.find(item => item.fps)?.fps; return known ? `${(windowSize / known).toFixed(2)} giây` : null }, [summary, windowSize])
   const imageUrl = (name: string) => `${API}/projects/${session.projectId}/datasets/${datasetId}/images/${name.split('/').map(encodeURIComponent).join('/')}?token=${encodeURIComponent(session.recoveryKey)}`

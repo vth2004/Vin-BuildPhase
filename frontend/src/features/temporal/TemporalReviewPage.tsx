@@ -1,3 +1,4 @@
+import { readSession } from '../../shared/session'
 import { FormEvent, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -7,10 +8,9 @@ import TemporalRunOptions from './TemporalRunOptions'
 import VideoImportPanel from '../video/VideoImportPanel'
 import './temporal.css'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+import { requestJson } from '../../shared/api'
 
-type Session = { projectId: string; recoveryKey: string; projectName: string }
-type Dataset = { id: string; name: string; status: string; image_count: number; schema_id: string }
+import type { Dataset } from '../../shared/types'
 type TemporalRun = {
   id: string
   dataset_id: string
@@ -28,18 +28,9 @@ const CONFIG = {
   face: { schemaId: 'vf_face_landmark50_v1', title: 'Face Landmark Temporal QA', backTo: '/face', backLabel: 'Face Landmark' },
 } as const
 
-function savedSession(): Session | null {
-  try {
-    const raw = localStorage.getItem('landmark-session')
-    return raw ? JSON.parse(raw) : null
-  } catch {
-    return null
-  }
-}
-
 export default function TemporalReviewPage({ feature }: { feature: keyof typeof CONFIG }) {
   const config = CONFIG[feature]
-  const session = savedSession()
+  const session = readSession()
   const [searchParams, setSearchParams] = useSearchParams()
   const [runs, setRuns] = useState<TemporalRun[]>([])
   const [datasets, setDatasets] = useState<Dataset[]>([])
@@ -55,15 +46,10 @@ export default function TemporalReviewPage({ feature }: { feature: keyof typeof 
 
   const loadWorkspace = async (preferredDatasetId?: string) => {
     if (!session) return
-    const headers = { Authorization: `Bearer ${session.recoveryKey}` }
-    const [runsResponse, projectResponse] = await Promise.all([
-      fetch(`${API}/projects/${session.projectId}/runs?schema_id=${config.schemaId}`, { headers }),
-      fetch(`${API}/projects/${session.projectId}`, { headers }),
+    const [items, project] = await Promise.all([
+      requestJson<TemporalRun[]>(`/projects/${session.projectId}/runs?schema_id=${config.schemaId}`, {}, session.recoveryKey),
+      requestJson<{ datasets: Dataset[] }>(`/projects/${session.projectId}`, {}, session.recoveryKey),
     ])
-    if (!runsResponse.ok) throw new Error((await runsResponse.json().catch(() => null))?.detail || `HTTP ${runsResponse.status}`)
-    if (!projectResponse.ok) throw new Error((await projectResponse.json().catch(() => null))?.detail || `HTTP ${projectResponse.status}`)
-    const items = await runsResponse.json() as TemporalRun[]
-    const project = await projectResponse.json() as { datasets: Dataset[] }
     const temporalRuns = items.filter(run => run.temporal_enabled)
     const matchingDatasets = project.datasets.filter(dataset => dataset.schema_id === config.schemaId)
     setRuns(temporalRuns); setDatasets(matchingDatasets)
@@ -84,16 +70,12 @@ export default function TemporalReviewPage({ feature }: { feature: keyof typeof 
     if (!session || !datasetId || !temporalEnabled) return
     setBusy(true); setMessage('Đang tạo Temporal run...')
     try {
-      const response = await fetch(`${API}/projects/${session.projectId}/runs?dataset_id=${datasetId}&temporal_enabled=true&window_size=${windowSize}`, {
-        method: 'POST', headers: { Authorization: `Bearer ${session.recoveryKey}` },
-      })
-      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || `HTTP ${response.status}`)
-      const created = await response.json() as { id: string }
+      const created = await requestJson<{ id: string }>(`/projects/${session.projectId}/runs?dataset_id=${datasetId}&temporal_enabled=true&window_size=${windowSize}`, {
+        method: 'POST',
+      }, session.recoveryKey)
       setSelectedRunId(created.id)
       const poll = async (): Promise<void> => {
-        const stateResponse = await fetch(`${API}/projects/${session.projectId}/runs/${created.id}`, { headers: { Authorization: `Bearer ${session.recoveryKey}` } })
-        if (!stateResponse.ok) throw new Error((await stateResponse.json().catch(() => null))?.detail || `HTTP ${stateResponse.status}`)
-        const state = await stateResponse.json() as { status: string; progress: number; error_message?: string; input_mode?: 'annotated' | 'ai_qc' }
+        const state = await requestJson<{ status: string; progress: number; error_message?: string; input_mode?: 'annotated' | 'ai_qc' }>(`/projects/${session.projectId}/runs/${created.id}`, {}, session.recoveryKey)
         setRuns(current => [{ id: created.id, dataset_id: datasetId, dataset_name: datasets.find(item => item.id === datasetId)?.name || datasetId, status: state.status, progress: state.progress, created_at: Date.now(), temporal_enabled: true, temporal_window_size: windowSize, input_mode: state.input_mode || 'annotated' }, ...current.filter(run => run.id !== created.id)])
         setMessage(`Temporal run: ${state.status} (${state.progress}%)`)
         if (state.status === 'completed') { setBusy(false); return }
@@ -113,9 +95,7 @@ export default function TemporalReviewPage({ feature }: { feature: keyof typeof 
       const body = new FormData(); body.append('file', zipFile); body.append('schema_id', config.schemaId)
       if (annotationFile) body.append('annotation_file', annotationFile)
       if (manifestFile) body.append('sequence_manifest_file', manifestFile)
-      const response = await fetch(`${API}/projects/${session.projectId}/datasets`, { method: 'POST', headers: { Authorization: `Bearer ${session.recoveryKey}` }, body })
-      if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || `HTTP ${response.status}`)
-      const dataset = await response.json() as Dataset
+      const dataset = await requestJson<Dataset>(`/projects/${session.projectId}/datasets`, { method: 'POST', body }, session.recoveryKey)
       setZipFile(null); setAnnotationFile(null); setManifestFile(null)
       await loadWorkspace(dataset.id)
       setMessage(`Đã nhập ${dataset.image_count} frame vào ${dataset.name} và tự chọn dataset này.`)
